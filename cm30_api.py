@@ -22,9 +22,14 @@ def get_stage_xy():
     return r.json()
 
 def z_move(z):
-    url = URL_BASE + 'stage_z'
+    url = URL_BASE + 'stage_z.move'
     r = requests.post(url, json= {'z': z})
     return r
+
+def get_stage_z():
+    url = URL_BASE + 'stage_z'
+    r = requests.get(url)
+    return r.json()
 
 def autofocus(z_default=1000, z_offset=0):
     url = URL_BASE + 'stage_z.focus'

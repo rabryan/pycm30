@@ -3,6 +3,7 @@ from tkinter import ttk
 from cm30_api import *
 from PIL import ImageTk
 import time
+import collections
 
 root = Tk()
 frm = ttk.Frame(root, padding=10)
@@ -28,6 +29,14 @@ def set_highres():
 
 set_highres()
 
+def move_z(dz):
+    r = get_stage_z()
+    print(r)
+    z = r.get('z')
+    new_z = z + dz
+    print("Moving z to {}".format(new_z))
+    z_move(new_z)
+
 def move_up():
     print("Moving up")
     move_rel(0, -MOVE_STEP)
@@ -49,25 +58,38 @@ render = ImageTk.PhotoImage(img)
 img_label = ttk.Label(frm, image=render)
 img_label.grid(column=0, row=2)
 
-def image_refresh():
+renders = collections.deque(maxlen=80)
+current_frame = 0
+
+def image_fetch():
     tstart = time.time()
     try:
         img = get_image()
         print("Image captured in {} ms".format(int(1000*(time.time() - tstart))))
         render = ImageTk.PhotoImage(img)
-        img_label.image = render
-        img_label.configure(image=render)
+        #img_label.image = render
+        #img_label.configure(image=render)
+        renders.append(render)
     except Exception as e:
         print(e)
+    
+    root.after(10000, image_fetch)
 
-    root.after(1000, image_refresh)
+def image_update():
+    global current_frame
+    print("displaying frame {} of {}".format(current_frame, len(renders)))
+    img_label.image = renders[current_frame]
+    render = renders[current_frame]
+    img_label.configure(image=render)
+    current_frame = (current_frame + 1) % len(renders)
+    root.after(100, image_update)
 
-ttk.Button(frm, text="Move Up", command=move_up).grid(column=0, row=1)
-ttk.Button(frm, text="Move Left", command=move_left).grid(column=1, row=1)
-ttk.Button(frm, text="Move Right", command=move_right).grid(column=2, row=1)
-ttk.Button(frm, text="Move Down", command=move_down).grid(column=3, row=1)
-ttk.Button(frm, text="Refresh", command=image_refresh).grid(column=4, row=1)
-ttk.Button(frm, text="Autofocus", command=autofocus).grid(column=5, row=1)
+#ttk.Button(frm, text="Move Up", command=move_up).grid(column=0, row=1)
+#ttk.Button(frm, text="Move Left", command=move_left).grid(column=1, row=1)
+#ttk.Button(frm, text="Move Right", command=move_right).grid(column=2, row=1)
+#ttk.Button(frm, text="Move Down", command=move_down).grid(column=3, row=1)
+#ttk.Button(frm, text="Refresh", command=image_refresh).grid(column=4, row=1)
+#ttk.Button(frm, text="Autofocus", command=autofocus).grid(column=5, row=1)
 def on_key_press(ev):
     print(ev)
     print(ev.keysym)
@@ -87,9 +109,20 @@ def on_key_press(ev):
         MOVE_STEP = MOVE_STEP - 100
         if MOVE_STEP < 10:
             MOVE_STEP = 10
+    elif ev.keycode == 46: #l
+        set_lowres()
+    elif ev.keycode == 43: #h
+        set_highres()
+    elif ev.keycode == 41: #f
+        autofocus()
+    elif ev.keycode == 30: #u
+        move_z(10)
+    elif ev.keycode == 40: #d
+        move_z(-10)
 
 root.bind('<Key>', on_key_press)
 #img_label.bind('<Key>', on_key_press)
 root.geometry('1900x1200')
-root.after(2000, image_refresh)
+image_fetch()
+root.after(2000, image_update)
 root.mainloop()
