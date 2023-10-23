@@ -1,6 +1,6 @@
 from tkinter import *
 from tkinter import ttk
-from cm30_api import *
+from pycm30.cm30_api import *
 from PIL import ImageTk
 import time
 import collections
