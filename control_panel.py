@@ -5,6 +5,7 @@ from PIL import ImageTk
 import time
 import collections
 
+init('lucid-hub-acmm')
 root = Tk()
 frm = ttk.Frame(root, padding=10)
 grid = frm.grid()
@@ -58,10 +59,11 @@ render = ImageTk.PhotoImage(img)
 img_label = ttk.Label(frm, image=render)
 img_label.grid(column=0, row=2)
 
-renders = collections.deque(maxlen=80)
+renders = collections.deque(maxlen=1)
 current_frame = 0
 
 def image_fetch():
+    global img
     tstart = time.time()
     try:
         img = get_image()
@@ -77,9 +79,13 @@ def image_fetch():
 
 def image_update():
     global current_frame
-    print("displaying frame {} of {}".format(current_frame, len(renders)))
-    img_label.image = renders[current_frame]
-    render = renders[current_frame]
+    if False:
+        print("displaying frame {} of {}".format(current_frame, len(renders)))
+        img_label.image = renders[current_frame]
+        render = renders[current_frame]
+    else:
+        render = renders[0]
+    img_label.image = render
     img_label.configure(image=render)
     current_frame = (current_frame + 1) % len(renders)
     root.after(100, image_update)

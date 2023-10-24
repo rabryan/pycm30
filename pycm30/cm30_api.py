@@ -2,8 +2,13 @@ import requests
 from PIL import Image
 from io import BytesIO
 
-URL_BASE='http://localhost:8080/cm/'
-API_BASE='http://localhost:8080/cm/v1/'
+URL_BASE=None
+API_BASE=None
+def init(hostname='localhost', port=8080):
+    global URL_BASE
+    global API_BASE
+    URL_BASE='http://{}:{}/cm/'.format(hostname, port)
+    API_BASE=URL_BASE + 'v1/'
 
 def _api_get(path):
     url = API_BASE + path
@@ -67,9 +72,34 @@ def is_moving():
     xy_info = get_stage_xy()
     return xy_info['is_moving']
 
+def is_head_connected():
+    if head_info.get('code', 0) == 5031:
+        return False
+
+    return True
+
 if __name__ == '__main__':
+    import sys
+    import time
+    hostname = 'localhost'
+    port = 8080
+    if len(sys.argv) > 1:
+        hostname = sys.argv[1]
+        print("Using hostname {}".format(hostname))
+    if len(sys.argv) > 2:
+        port = sys.argv[2]
+        print("Using port {}".format(port))
+
+    init(hostname, port)
     head_init()
     head_info = get_head_info()
+    while head_info.get('code', 0) == 5031:
+        print("Waiting for head to connect...", end='\r')
+        time.sleep(1)
+    
+    print("Head connected - info:")
+    print(head_info)
+
     device_info = get_device_info()
     light_params = get_light_params()
     
@@ -96,9 +126,12 @@ if __name__ == '__main__':
                 time.sleep(0.1)
             
             print("Move complete after {}s".format(time.time() - tstart))
-
+            
+            tstamp = time.time()
             res = image_capture_save({'x':x, 'y':y})
             print(res.json())
             file_ids = res.json()['file_ids']
             images[(x,y)] = file_ids
+            #TODO - record locations, timestamp, and file id
+            # use influxdb?
             print("images[({},{})] = {}".format(x,y,file_ids))
