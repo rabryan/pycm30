@@ -58,7 +58,7 @@ def get_light_params(): return _api_get('light')
 def image_capture_save(user_data={}): 
     return _api_post('image.capture_save', json=user_data)
 
-def autofocus(z_default=1000, z_offset=0):
+def autofocus(z_default=3240, z_offset=-50):
     url = API_BASE + 'stage_z.focus'
     r = requests.post(url, json= {'z_default': z_default, 'z_offset': z_offset})
     return r
