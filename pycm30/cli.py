@@ -199,12 +199,34 @@ def get_well_center(row, col):
     y_um = int(1000*y)
     return x_um, y_um
 
+MIN_STEP=105 
+DX=MIN_STEP*27 #2840 
+DY=MIN_STEP*20 #2100
+WELL_DIAMETER=9
+
+def get_positions_for_well(row_idx, col_idx):
+    cx,cy = get_well_center(row_idx, col_idx)
+    #generate square tile set for left to right - top to bottom scan
+    VERT_SLICES=4
+    HORIZ_SLICES=4
+    ul_x = cx - DX/2
+    ul_y = cy - DY/2
+    positions = []
+    #FIXME - this only covers a portion of the well
+    for j in range(VERT_SLICES):
+        y_pos = ul_y + j*DY/2
+        for i in range(HORIZ_SLICES):
+            x_pos = ul_x + i*DX/2
+            positions.append((x_pos, y_pos, i, j))
+    
+    return positions
+
 @cmds.command()
 @click.argument('directory')
 @click.option('--hostname', default='localhost')
 @click.option('--port', default=8080)
 @click.option('--z-default', default=3240.0)
-def scan_32x_ss(directory, hostname='localhost', port=8080, z_default=3240):
+def scan_32x_ss(directory, hostname='localhost', port=8080, z_default=3230):
     api.init(hostname, port)
     print(api.get_head_info())
     xy_info = api.get_stage_xy()
@@ -218,16 +240,19 @@ def scan_32x_ss(directory, hostname='localhost', port=8080, z_default=3240):
     DY=MIN_STEP*20 #213
     
     api.z_move(z_default)
-    r = api.autofocus(z_default=z_default)
+    r = api.set_z_focus_range(3200, 3260)
+    print(r)
+    r = api.autofocus(z_default=z_default, z_offset=-30)
+    print(r)
     print(api.get_stage_z())
     import time
     
-    while True:
-        for col in [3, 4, 9, 10]:
-            for row in range(1,9)[::-1]:
-                col_idx = col-1
-                row_idx = row - 1
-                x,y = get_well_center(row_idx, col_idx)
+    for col in [3, 4, 9, 10]:
+        for row in range(1,9)[::-1]:
+            col_idx = col-1
+            row_idx = row - 1
+
+            for x,y,tile_x_idx, tile_y_idx in get_positions_for_well(row_idx, col_idx):
                 print("rc {},{}".format(row,col))
                 print("Moving to {},{}".format(x,y))
                 api.xy_move(x,y)
@@ -239,7 +264,8 @@ def scan_32x_ss(directory, hostname='localhost', port=8080, z_default=3240):
                 x,y = xy['x'], xy['y'] #actual x,y may differ from requested due to stepper min res
                 print("Move complete after {}s".format(time.time() - tstart))
             
-                r = api.autofocus(z_default=z_default)
+                #r = api.autofocus(z_default=z_default, z_offset=-30)
+                #print(r.content)
                 z_info = api.get_stage_z()
                 print(z_info)
                 z = z_info['z']
@@ -249,7 +275,8 @@ def scan_32x_ss(directory, hostname='localhost', port=8080, z_default=3240):
                 img = api.get_image()
                 dt = datetime.datetime.fromtimestamp(tstamp)
                 #z = fixed_z
-                fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + "_atloc_x{}_y{}_z{}_r{}_c{}.jpg".format(x, y, z, row, col)
+                fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + "_atloc_x{}_y{}_z{}_r{}_c{}_xt{}_yt{}.jpg".format(x, y, z, 
+                        row, col, tile_x_idx, tile_y_idx)
                 fpath = "{}/{}".format(directory, fname)
                 img.save(fpath)
                 print("wrote {}".format(fpath))

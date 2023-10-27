@@ -15,9 +15,12 @@ def _api_get(path):
     r = requests.get(url)
     return r.json()
 
-def _api_post(path, json={}):
+def _api_post(path, json=None):
     url = API_BASE + path
-    r = requests.post(url, json= json)
+    if json:
+        r = requests.post(url, json= json)
+    else:
+        r = requests.post(url)
     return r
 
 def get_image():
@@ -40,10 +43,12 @@ def get_stage_xy():
 
 def z_move(z):
     url = API_BASE + 'stage_z.move'
-    r = requests.post(url, json= {'z': z})
+    r = requests.post(url, json= {'z': z, 'z_mode': 'absolute'})
     return r
 
 def get_stage_z(): return _api_get('stage_z')
+
+def reboot(): return _api_post('power.reboot', {'sleep_sec':1})
 
 def get_api_info(): return _api_get('info')
 
@@ -58,9 +63,14 @@ def get_light_params(): return _api_get('light')
 def image_capture_save(user_data={}): 
     return _api_post('image.capture_save', json=user_data)
 
-def autofocus(z_default=3240, z_offset=-50):
+def autofocus(z_default=3240, z_offset=0):
     url = API_BASE + 'stage_z.focus'
     r = requests.post(url, json= {'z_default': z_default, 'z_offset': z_offset})
+    return r
+
+def set_z_focus_range(zmin=3230, zmax=3250):
+    url = API_BASE + 'stage_z'
+    r = requests.patch(url, json={'z_focus.range': [zmin, zmax]})
     return r
 
 def set_resolution(width, height):
