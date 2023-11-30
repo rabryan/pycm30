@@ -3,6 +3,7 @@ import os
 import re
 import datetime
 import pandas as pd
+import stitching
 
 def get_stitched(imgs):
     s = cv2.Stitcher_create(cv2.STITCHER_SCANS)
@@ -63,14 +64,19 @@ if __name__ == '__main__':
             continue
 
         imgs = [cv2.imread(_fullpath(p)) for p in fpaths]
-        status, stitched = get_stitched(imgs)
-        if status != 0:
-            print("Stitching failed for {}".format(k.fname))
-            continue
+        st = stitching.AffineStitcher()
+        stiched = st.stitch(imgs)
+        #img = c.process(_fullpath(p) for p in fpaths)
+        if False:
+            status, stitched = get_stitched(imgs)
+            if status != 0:
+                print("Stitching failed for {}".format(k.fname))
+                continue
         print("Stitched {}".format(k.fname))
         dtstr = k.datetime.strftime("%Y-%m-%d-%H_%M_%S")
         outpath = os.path.join(stitch_dir, "{}_r{}_c{}_merged.jpg".format(dtstr, int(k.row), int(k.col)))
-        cv2.imwrite(outpath, stitched)
+        cv2.imwrite(outpath, stiched)
+        #img.save(outpath)
 
     #def get_fpath(row, col)
     #get start tiles    

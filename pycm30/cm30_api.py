@@ -23,10 +23,21 @@ def _api_post(path, json=None):
         r = requests.post(url)
     return r
 
+def _api_put(path, json=None):
+    url = API_BASE + path
+    if json:
+        r = requests.put(url, json= json)
+    else:
+        r = requests.put(url)
+    return r
+
 def get_image():
     url = API_BASE + 'image.capture'
     r = requests.post(url)
+    if r.status_code != 200:
+        raise Exception("Failed to capture image - response {} : {}".format(r.status_code, r.json()))
     b = BytesIO(r.content)
+    print(len(r.content))
     img = Image.open(b)
     return img
 
@@ -54,11 +65,30 @@ def get_api_info(): return _api_get('info')
 
 def get_head_info(): return _api_get('head')
 
+def set_head_info(info={'power_saving': False}): return _api_post('head', info)
+
+def set_power_saving(on=False):
+    info = {'power_saving': on}
+    return set_head_info(info)
+
 def head_init(): return _api_post('head.init')
 
 def get_device_info(): return _api_get('info')
 
 def get_light_params(): return _api_get('light')
+
+def set_light_params(mode='led1_on'): 
+    return _api_put('light', {'mode': mode})
+
+def set_exposure_settings(iso=100, shutter_speed_denominator=20):
+
+    d = {
+      "iso_sensitivity": iso,
+      "mode": "manual",
+      "shutter_speed_denominator": shutter_speed_denominator
+    }
+
+    return _api_put('exposure', d)
 
 def image_capture_save(user_data={}): 
     return _api_post('image.capture_save', json=user_data)
@@ -77,7 +107,10 @@ def set_resolution(width, height):
     url = API_BASE + 'image'
     r = requests.put(url, json={'width': width, 'height': height})
     return r
-   
+  
+def set_highres():
+    return set_resolution(2048, 1536)
+
 def is_moving():
     xy_info = get_stage_xy()
     return xy_info['is_moving']

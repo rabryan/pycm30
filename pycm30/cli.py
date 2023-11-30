@@ -123,11 +123,21 @@ def scan_full(hostname='localhost', port=8080, autofocus_all=True):
 @click.option('--autofocus-init', default=True)
 @click.option('--autofocus-all', default=True)
 @click.option('--fixed-z', default=800.0)
-def scan_area(xmin, xmax, ymin, ymax, directory, hostname='localhost', port=8080, autofocus_init=True, autofocus_all=True, fixed_z=800.0):
+@click.option('--iso', default=100)
+@click.option('--shutter-speed-denominator', default=20)
+def scan_area(xmin, xmax, ymin, ymax, directory, hostname='localhost', port=8080, 
+        autofocus_init=True, autofocus_all=True, fixed_z=800.0, iso=100, 
+        shutter_speed_denominator=20):
     api.init(hostname, port)
     print(api.get_head_info())
+    #api.set_power_saving(False)
     xy_info = api.get_stage_xy()
+    api.set_light_params('led2_on')
+    api.set_resolution(2048, 1536)
+    api.set_exposure_settings(iso = iso, 
+            shutter_speed_denominator = shutter_speed_denominator)
 
+    print("Using exposure iso {} with shutter 1/{}".format(iso, shutter_speed_denominator))
     xrange= xy_info['x.range']
     XMAX = xrange[1] // 2 
     yrange= xy_info['y.range'] 
@@ -160,6 +170,8 @@ def scan_area(xmin, xmax, ymin, ymax, directory, hostname='localhost', port=8080
                 z_info = api.get_stage_z()
                 print(z_info)
                 z = z_info['z']
+            else:
+                z = fixed_z
             print("Move complete after {}s".format(time.time() - tstart))
             
             tstamp = time.time()

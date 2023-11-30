@@ -5,7 +5,7 @@ from PIL import ImageTk
 import time
 import collections
 
-init('lucid-hub-acmm')
+init('lucid-hub-acym')
 root = Tk()
 frm = ttk.Frame(root, padding=10)
 grid = frm.grid()
