@@ -190,6 +190,84 @@ def scan_area(xmin, xmax, ymin, ymax, directory, hostname='localhost', port=8080
             # use influxdb?
             #print("images[({},{})] = {}".format(x,y,file_ids))
 
+@cmds.command()
+@click.argument('row', type=int)
+@click.argument('col', type=int)
+@click.argument('directory')
+@click.option('--hostname', default='localhost')
+@click.option('--port', default=8080)
+@click.option('--autofocus-init', default=False)
+@click.option('--autofocus-all', default=False)
+@click.option('--fixed-z', default=800.0)
+@click.option('--iso', default=100)
+@click.option('--shutter-speed-denominator', default=20)
+def scan_well(row, col, directory, hostname='localhost', port=8080, 
+        autofocus_init=False, autofocus_all=False, fixed_z=2900.0, iso=100, 
+        shutter_speed_denominator=20):
+    
+    api.init(hostname, port)
+    print(api.get_head_info())
+    #api.set_power_saving(False)
+    xy_info = api.get_stage_xy()
+    api.set_light_params('led1_on')
+    api.set_resolution(2048, 1536)
+    api.set_exposure_settings(iso = iso, 
+            shutter_speed_denominator = shutter_speed_denominator)
+
+    print("Using exposure iso {} with shutter 1/{}".format(iso, shutter_speed_denominator))
+    xrange= xy_info['x.range']
+    XMAX = xrange[1] // 2 
+    yrange= xy_info['y.range'] 
+    YMAX = yrange[1] // 2 
+    MIN_STEP=105 
+    DX=MIN_STEP*27 #2840 
+    DY=MIN_STEP*20 #213
+    
+    if autofocus_init:
+        api.autofocus()
+        r = api.autofocus()
+        z_info = api.get_stage_z()
+        print(z_info)
+        z = z_info['z']
+    else:
+        api.z_move(fixed_z)
+        z = fixed_z
+    import time
+    
+    positions = get_positions_for_well(row, col)
+    images = dict()
+    for x,y,x_idx,y_idx in positions:
+        print("Moving to {},{}".format(x,y))
+        api.xy_move(x,y)
+        tstart = time.time()
+        while api.is_moving():
+            time.sleep(0.1)
+        
+        if autofocus_all:
+            r = api.autofocus()
+            z_info = api.get_stage_z()
+            print(z_info)
+            z = z_info['z']
+        else:
+            z = fixed_z
+        print("Move complete after {}s".format(time.time() - tstart))
+        
+        tstamp = time.time()
+        img = api.get_image()
+        dt = datetime.datetime.fromtimestamp(tstamp)
+        fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + "_atloc_x{}_y{}_z{}.jpg".format(x, y, z)
+        fpath = "{}/{}".format(directory, fname)
+        img.save(fpath)
+        print("wrote {}".format(fpath))
+        #res = api.image_capture_save({'x':x, 'y':y})
+        #print("Image capture_save took {}s".format(time.time() - tstamp))
+        #print(res.json())
+        #file_ids = res.json()['file_ids']
+        #images[(x,y)] = file_ids
+        #TODO - record locations, timestamp, and file id
+        # use influxdb?
+        #print("images[({},{})] = {}".format(x,y,file_ids))
+
 
 def get_well_center(row, col):
     #plate is oriented such that row is horizontal (x direction)
