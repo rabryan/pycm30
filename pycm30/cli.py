@@ -291,6 +291,9 @@ def get_well_center(row, col):
     y_um = int(1000*y)
     return x_um, y_um
 
+def pos_round(x_um, y_um):
+    #round position to nearest whole multiple of step resolution
+    return MIN_STEP*(x_um // MIN_STEP), MIN_STEP*(y_um // MIN_STEP)
 MIN_STEP=105 
 DX=MIN_STEP*26 #2730 
 DY=MIN_STEP*20 #2100
@@ -303,6 +306,9 @@ def get_positions_for_well(row_idx, col_idx):
     HORIZ_SLICES=4
     ul_x = cx - DX*HORIZ_SLICES/2 + DX/2
     ul_y = cy - DY*VERT_SLICES/2 + DY/2
+
+    ul_x, ul_y = pos_round(ul_x, ul_y)
+    
     positions = []
     #FIXME - this only covers a portion of the well
     for j in range(VERT_SLICES):
