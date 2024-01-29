@@ -269,6 +269,8 @@ def scan_well(row, col, directory, hostname='localhost', port=8080,
         #print("images[({},{})] = {}".format(x,y,file_ids))
 
 
+#CAL_OFFSET_X=0 #um
+#CAL_OFFSET_Y=-0.2 #um
 def get_well_center(row, col):
     #plate is oriented such that row is horizontal (x direction)
     # and y is vertical 
@@ -290,7 +292,7 @@ def get_well_center(row, col):
     return x_um, y_um
 
 MIN_STEP=105 
-DX=MIN_STEP*27 #2840 
+DX=MIN_STEP*26 #2730 
 DY=MIN_STEP*20 #2100
 WELL_DIAMETER=9
 
@@ -299,14 +301,14 @@ def get_positions_for_well(row_idx, col_idx):
     #generate square tile set for left to right - top to bottom scan
     VERT_SLICES=4
     HORIZ_SLICES=4
-    ul_x = cx - DX/2
-    ul_y = cy - DY/2
+    ul_x = cx - DX*HORIZ_SLICES/2 + DX/2
+    ul_y = cy - DY*VERT_SLICES/2 + DY/2
     positions = []
     #FIXME - this only covers a portion of the well
     for j in range(VERT_SLICES):
-        y_pos = ul_y + j*DY/2
+        y_pos = ul_y + j*DY
         for i in range(HORIZ_SLICES):
-            x_pos = ul_x + i*DX/2
+            x_pos = ul_x + i*DX
             positions.append((x_pos, y_pos, i, j))
     
     return positions
