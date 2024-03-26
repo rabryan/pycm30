@@ -1,6 +1,7 @@
 import requests
 from PIL import Image
 from io import BytesIO
+import time
 
 URL_BASE=None
 API_BASE=None
@@ -34,8 +35,11 @@ def _api_put(path, json=None):
 def get_image():
     url = API_BASE + 'image.capture'
     r = requests.post(url)
-    if r.status_code != 200:
-        raise Exception("Failed to capture image - response {} : {}".format(r.status_code, r.json()))
+    while r.status_code != 200:
+        print("Failed to capture image - response {} : {}".format(r.status_code, r.json()))
+        time.sleep(0.1)
+        r = requests.post(url)
+
     b = BytesIO(r.content)
     print(len(r.content))
     img = Image.open(b)
@@ -65,7 +69,7 @@ def get_api_info(): return _api_get('info')
 
 def get_head_info(): return _api_get('head')
 
-def set_head_info(info={'power_saving': False}): return _api_post('head', info)
+def set_head_info(info={'power_saving': False}): return _api_put('head', info)
 
 def set_power_saving(on=False):
     info = {'power_saving': on}
