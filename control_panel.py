@@ -4,8 +4,15 @@ from pycm30.cm30_api import *
 from PIL import ImageTk
 import time
 import collections
+import sys
 
-init('lucid-hub-acym')
+if len(sys.argv) == 2:
+    host=sys.argv[1]
+else:
+    host='localhost'
+
+print(f'connecting to {host}')
+init(host)
 root = Tk()
 frm = ttk.Frame(root, padding=10)
 grid = frm.grid()

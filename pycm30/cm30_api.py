@@ -3,8 +3,11 @@ from PIL import Image
 from io import BytesIO
 import time
 
+SS_DENOMINATORS=[8,10,13,15,20,25,30,40,50,60,80,100,125,160,200,250,320,400,500,640,800,1000,1250,1600,2000,2500,3200,4000,5000,6400,8000]
+
 URL_BASE=None
 API_BASE=None
+
 def init(hostname='localhost', port=8080):
     global URL_BASE
     global API_BASE
@@ -49,6 +52,8 @@ def xy_move(x, y):
     url = API_BASE + 'stage_xy.move'
     print("Moving to {},{}".format(x,y))
     r = requests.post(url, json= {'x': x, 'y':y})
+    while r.status_code == 409:
+        r = requests.post(url, json= {'x': x, 'y':y})
     return r
 
 def get_stage_xy():
@@ -84,15 +89,20 @@ def get_light_params(): return _api_get('light')
 def set_light_params(mode='led1_on'): 
     return _api_put('light', {'mode': mode})
 
-def set_exposure_settings(iso=100, shutter_speed_denominator=20):
+def set_exposure_settings(iso=100, shutter_speed_denominator=20, mode='manual'):
 
     d = {
       "iso_sensitivity": iso,
-      "mode": "manual",
+      "mode": mode,
       "shutter_speed_denominator": shutter_speed_denominator
     }
 
     return _api_put('exposure', d)
+
+def exposure_lock(): return _api_post('exposure.lock')
+
+def exposure_unlock(): return _api_post('exposure.unlock')
+
 
 def image_capture_save(user_data={}): 
     return _api_post('image.capture_save', json=user_data)

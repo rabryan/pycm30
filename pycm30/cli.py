@@ -113,6 +113,18 @@ def scan_full(hostname='localhost', port=8080, autofocus_all=True):
             print("images[({},{})] = {}".format(x,y,file_ids))
 
 @cmds.command()
+@click.argument('fpath')
+@click.option('--hostname', default='localhost')
+@click.option('--port', default=8080)
+def image(fpath, hostname='localhost', port=8080):
+    api.init(hostname, port)
+    img = api.get_image()
+    #fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + "_atloc_x{}_y{}_z{}.jpg".format(x, y, z)
+    #fpath = "{}/{}".format(directory, fname)
+    img.save(fpath)
+    print("wrote {}".format(fpath))
+
+@cmds.command()
 @click.argument('xmin', type=int)
 @click.argument('xmax', type=int)
 @click.argument('ymin', type=int)
@@ -147,12 +159,14 @@ def scan_area(xmin, xmax, ymin, ymax, directory, hostname='localhost', port=8080
     DY=MIN_STEP*20 #213
     
     if autofocus_init:
+        print("Autofocusing")
         api.autofocus()
         r = api.autofocus()
         z_info = api.get_stage_z()
         print(z_info)
         z = z_info['z']
     else:
+        print("Moving to z {}".format(fixed_z))
         api.z_move(fixed_z)
     import time
     
@@ -201,18 +215,22 @@ def scan_area(xmin, xmax, ymin, ymax, directory, hostname='localhost', port=8080
 @click.option('--fixed-z', default=800.0)
 @click.option('--iso', default=100)
 @click.option('--shutter-speed-denominator', default=20)
+@click.option('--light-params', default='led1_on')
 def scan_well(row, col, directory, hostname='localhost', port=8080, 
         autofocus_init=False, autofocus_all=False, fixed_z=2900.0, iso=100, 
-        shutter_speed_denominator=20):
+        shutter_speed_denominator=20, light_params='led1_on'):
     
     api.init(hostname, port)
     print(api.get_head_info())
-    #api.set_power_saving(False)
+    api.set_power_saving(False)
     xy_info = api.get_stage_xy()
-    api.set_light_params('led1_on')
+    api.set_light_params(light_params)
+    api.set_power_saving(False)
     api.set_resolution(2048, 1536)
+    api.exposure_unlock()
     api.set_exposure_settings(iso = iso, 
             shutter_speed_denominator = shutter_speed_denominator)
+    api.exposure_lock()
 
     print("Using exposure iso {} with shutter 1/{}".format(iso, shutter_speed_denominator))
     xrange= xy_info['x.range']
@@ -230,6 +248,7 @@ def scan_well(row, col, directory, hostname='localhost', port=8080,
         print(z_info)
         z = z_info['z']
     else:
+        print("Moving to z {}".format(fixed_z))
         api.z_move(fixed_z)
         z = fixed_z
     import time
@@ -238,7 +257,9 @@ def scan_well(row, col, directory, hostname='localhost', port=8080,
     images = dict()
     for x,y,x_idx,y_idx in positions:
         print("Moving to {},{}".format(x,y))
-        api.xy_move(x,y)
+        resp = api.xy_move(x,y)
+        print(resp)
+        time.sleep(0.2)
         tstart = time.time()
         while api.is_moving():
             time.sleep(0.1)
@@ -255,6 +276,8 @@ def scan_well(row, col, directory, hostname='localhost', port=8080,
         tstamp = time.time()
         img = api.get_image()
         dt = datetime.datetime.fromtimestamp(tstamp)
+        #fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + "_atloc_x{}_y{}_z{}_r{}_c{}_xt{}_yt{}.jpg".format(x, y, z, 
+        #        row, col, x_idx, y_idx)
         fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + "_atloc_x{}_y{}_z{}.jpg".format(x, y, z)
         fpath = "{}/{}".format(directory, fname)
         img.save(fpath)
@@ -294,6 +317,7 @@ def get_well_center(row, col):
 def pos_round(x_um, y_um):
     #round position to nearest whole multiple of step resolution
     return MIN_STEP*(x_um // MIN_STEP), MIN_STEP*(y_um // MIN_STEP)
+
 MIN_STEP=105 
 DX=MIN_STEP*26 #2730 
 DY=MIN_STEP*20 #2100
@@ -337,12 +361,12 @@ def scan_32x_ss(directory, hostname='localhost', port=8080, z_default=3230):
     DX=MIN_STEP*27 #2840 
     DY=MIN_STEP*20 #213
     
-    api.z_move(z_default)
-    r = api.set_z_focus_range(3200, 3260)
-    print(r)
-    r = api.autofocus(z_default=z_default, z_offset=-30)
-    print(r)
-    print(api.get_stage_z())
+    #api.z_move(z_default)
+    #r = api.set_z_focus_range(3200, 3260)
+    #print(r)
+    #r = api.autofocus(z_default=z_default, z_offset=-30)
+    #print(r)
+    #print(api.get_stage_z())
     import time
     
     for col in [3, 4, 9, 10]:
@@ -365,9 +389,9 @@ def scan_32x_ss(directory, hostname='localhost', port=8080, z_default=3230):
                 #r = api.autofocus(z_default=z_default, z_offset=-30)
                 #print(r.content)
                 z_info = api.get_stage_z()
-                print(z_info)
+                #print(z_info)
                 z = z_info['z']
-                print("autofocused to {}".format(z))
+                #print("autofocused to {}".format(z))
                 
                 tstamp = time.time()
                 img = api.get_image()

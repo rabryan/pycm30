@@ -11,7 +11,9 @@ def get_stitched(imgs):
     return status, img
 
 if __name__ == '__main__':
-    img_dir = os.path.expanduser("~/Documents/lucid/experiments/c2c12-imaging/2023-10-27-coarse-interleave")
+    import sys
+    dir_rel = sys.argv[1]
+    img_dir = os.path.expanduser(dir_rel)
     stitch_dir = img_dir + '/stitched/'
     try:
         os.mkdir(stitch_dir)
@@ -26,15 +28,26 @@ if __name__ == '__main__':
         except:
             return {}
         dt = datetime.datetime.strptime(datestr, "%Y-%m-%d-%H_%M_%S")
-        regex = "x(\d+)_y(\d+)_z(\d+.\d+)_r(\d)_c(\d+)_xt(\d+)_yt(\d+).jpg"
+        regex = "x(\d+.\d*)_y(\d+.\d*)_z(\d+.\d+)_r(\d)_c(\d+)_xt(\d+)_yt(\d+).jpg"
         m = re.match(regex, locstr)
         if m is None:
-            return None
+            regex = "x(\d+.\d+)_y(\d+.\d+)_z(\d+.\d+).jpg"
+            m = re.match(regex, locstr)
+            if m is not None:
+                x,y,z = m.groups()
+                return {'datetime': dt, 
+                        'x': float(x),
+                        'y': float(y),
+                        'z': float(z),
+                        'fname': fname,
+                        }
+            else:
+                return None
 
         x,y,z,row,col,xtile,ytile = m.groups()
         return {'datetime': dt, 
-                'x': int(x),
-                'y': int(y),
+                'x': float(x),
+                'y': float(y),
                 'z': float(z),
                 'row': int(row),
                 'col': int(col),
@@ -74,7 +87,7 @@ if __name__ == '__main__':
                 continue
         print("Stitched {}".format(k.fname))
         dtstr = k.datetime.strftime("%Y-%m-%d-%H_%M_%S")
-        outpath = os.path.join(stitch_dir, "{}_r{}_c{}_merged.jpg".format(dtstr, int(k.row), int(k.col)))
+        outpath = os.path.join(stitch_dir, "{}_merged.jpg".format(dtstr))#, int(k.row), int(k.col)))
         cv2.imwrite(outpath, stiched)
         #img.save(outpath)
 
