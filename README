@@ -1,0 +1,20 @@
+pycm30
+-------
+
+python library for interfacing with the cm30 incubation monitor via their
+http api service.  
+
+SETUP
+-------
+Download the CM30 (previously CM20H) API from:
+
+https://www.olympus-lifescience.com/en/support/downloads/
+
+Unpack and run the appropiate api binary (e.g. apiserver/apiserver.x64) on the
+PC that will control the CM30 monitoring heads.
+
+Run tools/control_panel.py on the PC (or remotely by specifying the hostname of
+the PC running the server)
+
+
+
