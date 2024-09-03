@@ -10,15 +10,15 @@ def data_from_fname(fname):
     except:
         return None
     dt = datetime.datetime.strptime(datestr, "%Y-%m-%d-%H_%M_%S")
-    regex = "x(\d+)_y(\d+)_z(\d+.\d+).jpg"
+    regex = "x(\d+.\d+)_y(\d+.\d+)_z(\d+.\d+).jpg"
     m = re.match(regex, locstr)
     if m is None:
         return None
 
     x,y,z = m.groups()
     return {'datetime': dt, 
-            'x': int(x),
-            'y': int(y),
+            'x': float(x),
+            'y': float(y),
             'z': float(z),
             'fname': fname,
             }
@@ -56,23 +56,29 @@ if __name__ == '__main__':
     ymin = df.y.min()
     ymax = df.y.max()
     
-    DX=105*27
-    DY=105*20
+    MIN_STEP=105 
+    DX=MIN_STEP*26 #2730 
+    DY=MIN_STEP*20 #2100
+    WELL_DIAMETER=9
+    #DX=105*27
+    #DY=105*20
     
+    PIXEL_WIDTH=1.392156863 #uM
+    PIXEL_HEIGHT=1.38671875 #uM
     print("New image - {} x {} px".format(TILED_WIDTH_PX, TILED_HEIGHT_PX))
     def get_indices(x,y):
-        i = round((x - xmin) / DX)
-        j = round((y - ymin) / DY)
+        i = round((x - xmin) / PIXEL_WIDTH)
+        j = round((y - ymin) / PIXEL_HEIGHT)
         return i, j
 
     for i, r in df.iterrows():
-        i, j = get_indices(r.x, r.y)
         image = Image.open(os.path.join(img_dir, r.fname))
 
-        tiled_im.paste(image, (i*WIDTH_PX, j*HEIGHT_PX))
+        px, py = get_indices(r.x, r.y)
+        tiled_im.paste(image, (px, py))
 
 
-    fpath = os.path.expanduser('~/.tmp/tiled.jpg')
+    fpath = os.path.expanduser(img_dir + '/tiled.jpg')
     tiled_im.save(fpath)
     print("saved to {}".format(fpath))
 

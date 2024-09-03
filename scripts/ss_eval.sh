@@ -11,9 +11,9 @@ for z in $ZS; do
     for ss in 200 160 125 100; do
         for iso in 160 200 250 320; do
             TAG=ss_eval_rs_lid_${z}_ss_${ss}_iso_${iso}
-            DIR=~/Documents/lucid/experiments/cm30/calibration-slide/$TAG
+            DIR=~/Documents/lucid/experiments/cm30/beads/sidelight/5-7-14/ss_iso_eval/$TAG
             mkdir $DIR
-            python3 pycm30/cli.py scan-area $XMIN $XMAX $YMIN $YMAX $DIR --hostname lucid-hub-acym --autofocus-init False --fixed-z $z --autofocus-all False --iso $iso --shutter-speed-denominator $ss
+            python3 pycm30/cli.py scan-well  $DIR --hostname lucid-hub-acym --autofocus-init False --fixed-z $z --autofocus-all False --iso $iso --shutter-speed-denominator $ss
             python3 tile.py $DIR
             cp /home/rabryan/.tmp/tiled.jpg ~/Pictures/ref-slide-$TAG.jpg
         done;

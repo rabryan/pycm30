@@ -69,8 +69,8 @@ def image_loop(hostname='localhost', port=8080, autofocus_all=True):
 @cmds.command()
 @click.option('--hostname', default='localhost')
 @click.option('--port', default=8080)
-@click.option('--autofocus-all', default=True)
-def scan_full(hostname='localhost', port=8080, autofocus_all=True):
+@click.option('--autofocus-all', default=False)
+def scan_full(hostname='localhost', port=8080, autofocus_all=False):
     api.init(hostname, port)
     print(api.get_head_info())
     xy_info = api.get_stage_xy()
@@ -83,7 +83,8 @@ def scan_full(hostname='localhost', port=8080, autofocus_all=True):
     DX=MIN_STEP*27 #2840 
     DY=MIN_STEP*20 #213
     
-    api.autofocus()
+    if autofocus_all:
+        api.autofocus()
     print(api.get_stage_z())
     import time
     
