@@ -48,6 +48,19 @@ def get_image():
     img = Image.open(b)
     return img
 
+def get_image_preview():
+    url = API_BASE + 'image.preview'
+    r = requests.get(url)
+    while r.status_code != 200:
+        print("Failed to capture image - response {} : {}".format(r.status_code, r.json()))
+        time.sleep(0.1)
+        r = requests.get(url)
+
+    b = BytesIO(r.content)
+    print(len(r.content))
+    img = Image.open(b)
+    return img
+
 def xy_move(x, y):
     url = API_BASE + 'stage_xy.move'
     print("Moving to {},{}".format(x,y))

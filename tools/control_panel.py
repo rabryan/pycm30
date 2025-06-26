@@ -6,6 +6,8 @@ import time
 import collections
 import sys
 
+image_capture_fun = get_image
+
 if len(sys.argv) == 2:
     host=sys.argv[1]
 else:
@@ -13,6 +15,8 @@ else:
 
 print(f'connecting to {host}')
 init(host)
+set_power_saving(False)
+set_light_params('off')
 root = Tk()
 frm = ttk.Frame(root, padding=10)
 grid = frm.grid()
@@ -27,7 +31,7 @@ def move_rel(dx, dy):
     r = xy_move(new_x, new_y)
     print(r)
 
-MOVE_STEP=200
+MOVE_STEP=500
 
 def set_lowres():
     set_resolution(640, 480)
@@ -61,7 +65,7 @@ def move_down():
     print("Moving down")
     move_rel(0, MOVE_STEP)
 
-img = get_image()
+img = image_capture_fun()
 render = ImageTk.PhotoImage(img)
 img_label = ttk.Label(frm, image=render)
 img_label.grid(column=0, row=2)
@@ -73,7 +77,7 @@ def image_fetch():
     global img
     tstart = time.time()
     try:
-        img = get_image()
+        img = image_capture_fun()
         print("Image captured in {} ms".format(int(1000*(time.time() - tstart))))
         render = ImageTk.PhotoImage(img)
         #img_label.image = render
@@ -82,7 +86,7 @@ def image_fetch():
     except Exception as e:
         print(e)
     
-    root.after(10000, image_fetch)
+    root.after(100, image_fetch)
 
 def image_update():
     global current_frame
@@ -95,7 +99,7 @@ def image_update():
     img_label.image = render
     img_label.configure(image=render)
     current_frame = (current_frame + 1) % len(renders)
-    root.after(100, image_update)
+    root.after(20, image_update)
 
 #ttk.Button(frm, text="Move Up", command=move_up).grid(column=0, row=1)
 #ttk.Button(frm, text="Move Left", command=move_left).grid(column=1, row=1)
@@ -104,6 +108,7 @@ def image_update():
 #ttk.Button(frm, text="Refresh", command=image_refresh).grid(column=4, row=1)
 #ttk.Button(frm, text="Autofocus", command=autofocus).grid(column=5, row=1)
 def on_key_press(ev):
+    global image_capture_fun
     print(ev)
     print(ev.keysym)
     print(ev.keycode)
@@ -132,10 +137,14 @@ def on_key_press(ev):
         move_z(10)
     elif ev.keycode == 40: #d
         move_z(-10)
+    elif ev.keycode == 33: #p
+        image_capture_fun = get_image_preview
+    elif ev.keycode == 32: #o
+        image_capture_fun = get_image
 
 root.bind('<Key>', on_key_press)
 #img_label.bind('<Key>', on_key_press)
 root.geometry('1900x1200')
 image_fetch()
-root.after(2000, image_update)
+root.after(100, image_update)
 root.mainloop()
