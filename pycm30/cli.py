@@ -67,16 +67,18 @@ def image_loop(hostname='localhost', port=8080, autofocus_all=True):
         print("{} {}".format(tstamp, file_ids))
 
 @cmds.command()
+@click.argument('directory')
 @click.option('--hostname', default='localhost')
 @click.option('--port', default=8080)
 @click.option('--autofocus-all', default=False)
 @click.option('--zmin', default=3100)
 @click.option('--zmax', default=3500)
 @click.option('--zstep', default=10)
-def scan_full(hostname='localhost', port=8080, autofocus_all=False,
+def scan_full(directory, hostname='localhost', port=8080, autofocus_all=False,
               zmin=3100, zmax=3500, zstep=10):
     api.init(hostname, port)
     print(api.get_head_info())
+    set_standard_params()
     xy_info = api.get_stage_xy()
 
     xrange= xy_info['x.range']
@@ -90,8 +92,8 @@ def scan_full(hostname='localhost', port=8080, autofocus_all=False,
     import time
     
     images = dict()
-    for x in range(0, XMAX, DX):
-        for y in range(0, YMAX, DY):
+    for i, x in enumerate(range(0, XMAX, DX)):
+        for j,y in enumerate(range(0, YMAX, DY)):
             print("Moving to {},{}".format(x,y))
             api.xy_move(x,y)
             tstart = time.time()
@@ -100,22 +102,29 @@ def scan_full(hostname='localhost', port=8080, autofocus_all=False,
             
             print("XY Move complete after {}s".format(time.time() - tstart))
             
-            for z in range(zmin, zmax+1, zstep):
+            for k, z in enumerate(range(zmin, zmax+1, zstep)):
                 api.z_move(z)
                 tstart = time.time()
-                while api.is_moving():
+                while api.is_z_moving():
                     time.sleep(0.05)
                 print(f"Z move complete after {time.time() - tstart}")
 
                 tstamp = time.time()
                 res = api.image_capture_save({'x':x, 'y':y, 'z': z})
                 print("Image capture_save took {}s".format(time.time() - tstamp))
-                print(res.json())
-                file_ids = res.json()['file_ids']
-                images[(x,y, z)] = file_ids
-                #TODO - record locations, timestamp, and file id
-                # use influxdb?
-                print("images[({},{}, {})] = {}".format(x,y,z,file_ids))
+                z_info = api.get_stage_z()
+                #print(z_info)
+                z_actual = z_info['z']
+                #print("autofocused to {}".format(z))
+                
+                tstamp = time.time()
+                img = api.get_image()
+                dt = datetime.datetime.fromtimestamp(tstamp)
+                #z = fixed_z
+                fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + f"_atloc_x{x}_y{y}_z{z_actual}_xi{i}_yj{j}_zk{k}.jpg"
+                fpath = "{}/{}".format(directory, fname)
+                img.save(fpath)
+                print("wrote {}".format(fpath))
 
 @cmds.command()
 @click.argument('fpath')
@@ -208,6 +217,18 @@ def scan_area(xmin, xmax, ymin, ymax, directory, hostname='localhost', port=8080
             #TODO - record locations, timestamp, and file id
             # use influxdb?
             #print("images[({},{})] = {}".format(x,y,file_ids))
+
+def set_standard_params(iso = 100, shutter_speed_denominator=20, light_params='led1_on'):
+    api.set_power_saving(False)
+    api.set_compression(level='low')
+    api.set_light_params(light_params)
+    api.set_power_saving(False)
+    api.set_resolution(2048, 1536)
+    api.exposure_unlock()
+    api.set_exposure_settings(iso = iso, 
+            shutter_speed_denominator = shutter_speed_denominator)
+    api.exposure_lock()
+
 
 @cmds.command()
 @click.argument('row', type=int)

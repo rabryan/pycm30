@@ -35,6 +35,18 @@ def _api_put(path, json=None):
         r = requests.put(url)
     return r
 
+def _api_patch(path, json=None):
+    url = API_BASE + path
+    if json:
+        r = requests.patch(url, json= json)
+    else:
+        r = requests.patch(url)
+    return r
+
+def set_compression(level='low'):
+    url = API_BASE + 'image'
+    return _api_patch(url, {'compression_level': level})
+
 def get_image():
     url = API_BASE + 'image.capture'
     r = requests.post(url)
@@ -140,7 +152,9 @@ def set_highres():
 
 def is_moving():
     xy_info = get_stage_xy()
-    return xy_info['is_moving']
+    if xy_info['is_moving']:
+        return True
+    return is_z_moving()
 
 def is_z_moving():
     z_info = get_stage_z()
