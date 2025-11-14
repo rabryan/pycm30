@@ -70,7 +70,11 @@ def image_loop(hostname='localhost', port=8080, autofocus_all=True):
 @click.option('--hostname', default='localhost')
 @click.option('--port', default=8080)
 @click.option('--autofocus-all', default=False)
-def scan_full(hostname='localhost', port=8080, autofocus_all=False):
+@click.option('--zmin', default=3100)
+@click.option('--zmax', default=3500)
+@click.option('--zstep', default=10)
+def scan_full(hostname='localhost', port=8080, autofocus_all=False,
+              zmin=3100, zmax=3500, zstep=10):
     api.init(hostname, port)
     print(api.get_head_info())
     xy_info = api.get_stage_xy()
@@ -83,9 +87,6 @@ def scan_full(hostname='localhost', port=8080, autofocus_all=False):
     DX=MIN_STEP*27 #2840 
     DY=MIN_STEP*20 #213
     
-    if autofocus_all:
-        api.autofocus()
-    print(api.get_stage_z())
     import time
     
     images = dict()
@@ -97,21 +98,24 @@ def scan_full(hostname='localhost', port=8080, autofocus_all=False):
             while api.is_moving():
                 time.sleep(0.1)
             
-            if autofocus_all:
-                r = api.autofocus()
-                print(api.get_stage_z())
-
-            print("Move complete after {}s".format(time.time() - tstart))
+            print("XY Move complete after {}s".format(time.time() - tstart))
             
-            tstamp = time.time()
-            res = api.image_capture_save({'x':x, 'y':y})
-            print("Image capture_save took {}s".format(time.time() - tstamp))
-            print(res.json())
-            file_ids = res.json()['file_ids']
-            images[(x,y)] = file_ids
-            #TODO - record locations, timestamp, and file id
-            # use influxdb?
-            print("images[({},{})] = {}".format(x,y,file_ids))
+            for z in range(zmin, zmax+1, zstep):
+                api.z_move(z)
+                tstart = time.time()
+                while api.is_moving():
+                    time.sleep(0.05)
+                print(f"Z move complete after {time.time() - tstart}")
+
+                tstamp = time.time()
+                res = api.image_capture_save({'x':x, 'y':y, 'z': z})
+                print("Image capture_save took {}s".format(time.time() - tstamp))
+                print(res.json())
+                file_ids = res.json()['file_ids']
+                images[(x,y, z)] = file_ids
+                #TODO - record locations, timestamp, and file id
+                # use influxdb?
+                print("images[({},{}, {})] = {}".format(x,y,z,file_ids))
 
 @cmds.command()
 @click.argument('fpath')

@@ -142,6 +142,10 @@ def is_moving():
     xy_info = get_stage_xy()
     return xy_info['is_moving']
 
+def is_z_moving():
+    z_info = get_stage_z()
+    return z_info['is_moving']
+
 def is_head_connected():
     if head_info.get('code', 0) == 5031:
         return False
