@@ -74,11 +74,12 @@ def image_loop(hostname='localhost', port=8080, autofocus_all=True):
 @click.option('--zmin', default=3100)
 @click.option('--zmax', default=3500)
 @click.option('--zstep', default=10)
+@click.option('--lparams', default='led1_on')
 def scan_full(directory, hostname='localhost', port=8080, autofocus_all=False,
-              zmin=3100, zmax=3500, zstep=10):
+              zmin=3100, zmax=3500, zstep=10, lparams='led1_on'):
     api.init(hostname, port)
     print(api.get_head_info())
-    set_standard_params()
+    set_standard_params(light_params=lparams)
     xy_info = api.get_stage_xy()
 
     xrange= xy_info['x.range']
