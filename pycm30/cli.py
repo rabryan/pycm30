@@ -111,8 +111,6 @@ def scan_full(directory, hostname='localhost', port=8080, autofocus_all=False,
                 print(f"Z move complete after {time.time() - tstart}")
 
                 tstamp = time.time()
-                res = api.image_capture_save({'x':x, 'y':y, 'z': z})
-                print("Image capture_save took {}s".format(time.time() - tstamp))
                 z_info = api.get_stage_z()
                 #print(z_info)
                 z_actual = z_info['z']
@@ -120,6 +118,7 @@ def scan_full(directory, hostname='localhost', port=8080, autofocus_all=False,
                 
                 tstamp = time.time()
                 img = api.get_image()
+                print("Image acquire took {}s".format(time.time() - tstamp))
                 dt = datetime.datetime.fromtimestamp(tstamp)
                 #z = fixed_z
                 fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + f"_atloc_x{x}_y{y}_z{z_actual}_xi{i}_yj{j}_zk{k}.jpg"
