@@ -83,9 +83,9 @@ def scan_full(directory, hostname='localhost', port=8080, autofocus_all=False,
     xy_info = api.get_stage_xy()
 
     xrange= xy_info['x.range']
-    XMAX = xrange[1] // 2 
+    XMAX = xrange[1]
     yrange= xy_info['y.range'] 
-    YMAX = yrange[1] // 2 
+    YMAX = yrange[1]
     MIN_STEP=105 
     DX=MIN_STEP*27 #2840 
     DY=MIN_STEP*20 #213
