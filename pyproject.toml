@@ -40,7 +40,8 @@ analysis = [
     "stitching>=0.4",
 ]
 gui = [
-    "opencv-python>=4.5",
+    "dearpygui>=1.9",
+    "numpy>=1.20",
 ]
 dev = [
     "pytest>=7.0",
@@ -54,6 +55,7 @@ all = [
 
 [project.scripts]
 pycm30 = "pycm30.cli:cmds"
+pycm30-control = "tools.controller.main:main"
 
 [project.urls]
 Homepage = "https://github.com/rabryan/pycm30"
@@ -61,7 +63,7 @@ Repository = "https://github.com/rabryan/pycm30"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pycm30*"]
+include = ["pycm30*", "tools*"]
 
 [tool.ruff]
 line-length = 100
