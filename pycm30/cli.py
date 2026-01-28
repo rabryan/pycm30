@@ -70,10 +70,91 @@ def image_loop(hostname='localhost', port=8080, autofocus_all=True):
 @click.argument('directory')
 @click.option('--hostname', default='localhost')
 @click.option('--port', default=8080)
+@click.option('--xmin', default=28100)
+@click.option('--xmax', default=31100)
+@click.option('--ymin', default=29945)
+@click.option('--ymax', default=35445)
+@click.option('--zmin', default=2820)
+@click.option('--zmax', default=2860)
+@click.option('--zstep', default=1.5625)
+#@click.option('--lparams', default='led1_on')
+@click.option('--iso', default=100)
+#@click.option('--shutter-speed-denominator', default=10)
+@click.option('--timepoint-interval', default=1800) #seconds
+def scan_3d(directory, hostname='localhost', port=8080, xmin=28100, xmax=31100, ymin=30445, ymax=34945,
+              zmin=2820, zmax=2860, zstep=1.565, iso=100, timepoint_interval = 1800):
+
+    SSOS = [10, 20, 30]
+    api.init(hostname, port)
+    print(api.get_head_info())
+    set_standard_params(iso=iso, shutter_speed_denominator=SSOS[0], light_params='led1_on')
+
+    MIN_STEP=105 
+
+    OVERLAP = 0.5 #1 is nove overlap , 0 is infinite
+    DX=round(MIN_STEP*27 * OVERLAP)
+    DY=round(MIN_STEP*20 * OVERLAP)
+    
+    LEDS=['led1_on', 'led2_on']
+    import time
+    import itertools 
+    import numpy as np 
+
+    def _do_scan():
+        for i, x in enumerate(range(xmin, xmax, DX)):
+            for j,y in enumerate(range(ymin, ymax, DY)):
+                print("Moving to {},{}".format(x,y))
+                api.xy_move(x,y)
+                tstart = time.time()
+                while api.is_moving():
+                    time.sleep(0.1)
+                
+                print("XY Move complete after {}s".format(time.time() - tstart))
+                
+
+                for k, z in enumerate(np.arange(zmin, zmax+1, zstep)):
+                    api.z_move(z)
+                    tstart = time.time()
+                    while api.is_z_moving():
+                        time.sleep(0.05)
+                    print(f"Z move complete after {time.time() - tstart}")
+
+                    tstamp = time.time()
+                    z_info = api.get_stage_z()
+                    #print(z_info)
+                    z_actual = z_info['z']
+                    
+                    for sso, led in itertools.product(SSOS, LEDS):
+                        api.set_exposure_settings(iso=iso, shutter_speed_denominator=sso)
+                        api.set_light_params(led)
+                        tstamp = time.time()
+                        img = api.get_image()
+                        print("Image acquire took {}s".format(time.time() - tstamp))
+                        dt = datetime.datetime.fromtimestamp(tstamp)
+                        #z = fixed_z
+                        fname = dt.strftime("%Y-%m-%d-%H_%M_%S") + f"_atloc_x{x}_y{y}_z{z_actual}_xi{i}_yj{j}_zk{k}_ss{sso}_{led}.jpg"
+                        fpath = "{}/{}".format(directory, fname)
+                        img.save(fpath)
+                        print("wrote {}".format(fpath))
+        
+    while True:
+        scan_start = time.time()
+        print("starting scan")
+        _do_scan()
+        api.set_power_saving(True)
+        api.set_light_params('off')
+        dur = time.time() - scan_start
+        print(f"scan ended after {dur // 60} minutes. sleeping...")
+        time.sleep(timepoint_interval)
+
+@cmds.command()
+@click.argument('directory')
+@click.option('--hostname', default='localhost')
+@click.option('--port', default=8080)
 @click.option('--autofocus-all', default=False)
 @click.option('--zmin', default=3100)
 @click.option('--zmax', default=3500)
-@click.option('--zstep', default=10)
+@click.option('--zstep', default=1.5625)
 @click.option('--lparams', default='led1_on')
 @click.option('--iso', default=100)
 @click.option('--shutter-speed-denominator', default=30)
