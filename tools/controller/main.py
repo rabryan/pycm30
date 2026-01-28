@@ -160,19 +160,49 @@ def create_gui(controller: CM30Controller):
     """Create and run the DearPyGUI interface."""
     dpg.create_context()
 
-    # Create texture for image display
-    # Start with a placeholder black image
-    placeholder = np.zeros((controller.image_height, controller.image_width, 4), dtype=np.float32)
-    placeholder[:, :, 3] = 1.0  # Set alpha to 1
+    # Texture will be created lazily when first image arrives
+    texture_created = False
+    current_tex_width = 0
+    current_tex_height = 0
 
-    with dpg.texture_registry():
-        dpg.add_raw_texture(
-            width=controller.image_width,
-            height=controller.image_height,
-            default_value=placeholder.flatten().tolist(),
-            format=dpg.mvFormat_Float_rgba,
-            tag="live_texture",
-        )
+    def create_or_update_texture(img_array):
+        """Create texture on first call, update dimensions if needed."""
+        nonlocal texture_created, current_tex_width, current_tex_height
+
+        h, w = img_array.shape[:2]
+        flat_data = img_array.flatten()
+
+        if not texture_created:
+            # First time: create the texture
+            with dpg.texture_registry():
+                dpg.add_dynamic_texture(
+                    width=w,
+                    height=h,
+                    default_value=flat_data,
+                    tag="live_texture",
+                )
+            # Add image widget to display area
+            dpg.add_image("live_texture", parent="image_container", tag="live_image")
+            texture_created = True
+            current_tex_width = w
+            current_tex_height = h
+        elif w != current_tex_width or h != current_tex_height:
+            # Resolution changed: recreate texture
+            dpg.delete_item("live_image")
+            dpg.delete_item("live_texture")
+            with dpg.texture_registry():
+                dpg.add_dynamic_texture(
+                    width=w,
+                    height=h,
+                    default_value=flat_data,
+                    tag="live_texture",
+                )
+            dpg.add_image("live_texture", parent="image_container", tag="live_image")
+            current_tex_width = w
+            current_tex_height = h
+        else:
+            # Same size: just update the texture data
+            dpg.set_value("live_texture", flat_data)
 
     # Key handler
     def on_key_press(_sender, app_data):
@@ -193,7 +223,7 @@ def create_gui(controller: CM30Controller):
         elif key == dpg.mvKey_D:
             controller.move_z_rel(-controller.z_step)
         # Step size
-        elif key == dpg.mvKey_Plus or key == dpg.mvKey_Equal:
+        elif key == dpg.mvKey_Plus:# FIXMNE not a valid dpg key:  key == dpg.mvKey_Equal:
             controller.move_step += 100
             print(f"Move step: {controller.move_step}")
         elif key == dpg.mvKey_Minus:
@@ -274,8 +304,9 @@ def create_gui(controller: CM30Controller):
 
         dpg.add_separator()
 
-        # Image display
-        dpg.add_image("live_texture", tag="live_image")
+        # Image display container (texture added dynamically)
+        with dpg.group(tag="image_container"):
+            dpg.add_text("Waiting for first image...")
 
     # Configure viewport
     dpg.create_viewport(title="CM30 Control Panel", width=1920, height=1200)
@@ -287,35 +318,22 @@ def create_gui(controller: CM30Controller):
     capture_thread = threading.Thread(target=controller.image_capture_thread, daemon=True)
     capture_thread.start()
 
-    # Current texture dimensions (for detecting resolution changes)
-    current_tex_width = controller.image_width
-    current_tex_height = controller.image_height
+    # Track if we've removed the placeholder text
+    placeholder_removed = False
 
     # Main render loop
     while dpg.is_dearpygui_running() and controller.running:
         # Update image if available
         if controller.image_queue:
             img_array = controller.image_queue.popleft()
-            h, w = img_array.shape[:2]
 
-            # Check if we need to recreate texture due to resolution change
-            if w != current_tex_width or h != current_tex_height:
-                # Delete old texture and create new one
-                dpg.delete_item("live_texture")
-                with dpg.texture_registry():
-                    dpg.add_raw_texture(
-                        width=w,
-                        height=h,
-                        default_value=img_array.flatten().tolist(),
-                        format=dpg.mvFormat_Float_rgba,
-                        tag="live_texture",
-                    )
-                # Update image widget
-                dpg.configure_item("live_image", texture_tag="live_texture")
-                current_tex_width = w
-                current_tex_height = h
-            else:
-                dpg.set_value("live_texture", img_array.flatten().tolist())
+            # Remove placeholder text on first image
+            if not placeholder_removed:
+                for child in dpg.get_item_children("image_container", 1) or []:
+                    dpg.delete_item(child)
+                placeholder_removed = True
+
+            create_or_update_texture(img_array)
 
         # Update status display
         dpg.set_value("status_x", f"X: {controller.stage_x}")
@@ -335,7 +353,7 @@ def create_gui(controller: CM30Controller):
 def main():
     parser = argparse.ArgumentParser(description="CM30 Control Panel")
     parser.add_argument("hostname", nargs="?", default="localhost", help="CM30 API server hostname")
-    parser.add_argument("--port", type=int, default=8080, help="CM30 API server port")
+    parser.add_argument("--port", type=int, default=8001, help="CM30 API server port")
     args = parser.parse_args()
 
     controller = CM30Controller(hostname=args.hostname, port=args.port)
