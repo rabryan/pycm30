@@ -1,4 +1,39 @@
-__pycache__
+__pycache__/
+*.py[cod]
+*$py.class
 *.swp
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+pip-wheel-metadata/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+
+# Project specific
 CaptureImage.cm_v1_files/
 WebDocument.root/
