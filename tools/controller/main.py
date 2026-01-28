@@ -16,10 +16,15 @@ Keyboard Controls:
     1           - LED 1 on
     2           - LED 2 on
     0           - LEDs off
+    E           - Toggle exposure mode (manual/continuous)
+    Shift+E     - Toggle exposure lock
+    < / >       - Decrease / increase shutter speed
+    PgUp / PgDn - Increase / decrease ISO
     S           - Toggle power saving mode
     Space       - Toggle continuous image capture
     I           - Toggle image metadata panel
-    Ctrl+Shift+R - Set current Z as reference plane
+    Shift+X     - Set current XY as reference position
+    Shift+R     - Set current Z as reference plane
     R           - Reload UI (hot reload)
     Q / Escape  - Quit
 
@@ -38,6 +43,7 @@ import threading
 import argparse
 from collections import deque
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import dearpygui.dearpygui as dpg
@@ -69,6 +75,8 @@ class CM30Controller:
         self.stage_x = 0
         self.stage_y = 0
         self.stage_z = 0
+        self.x_ref = 0  # Reference X position for relative positioning
+        self.y_ref = 0  # Reference Y position for relative positioning
         self.z_ref = 0.0  # Reference Z plane for relative positioning
         self.light_mode = "off"
         self.power_saving = False
@@ -91,7 +99,7 @@ class CM30Controller:
             250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500,
             3200, 4000, 5000, 6400, 8000
         ]
-        self.VALID_ISO = [100, 200, 400, 800, 1600, 3200]
+        self.VALID_ISO = [100, 125, 160, 200, 250, 320, 400, 500, 640, 800]
 
         # Initialize API connection
         print(f"Connecting to {hostname}:{port}")
@@ -104,6 +112,11 @@ class CM30Controller:
         self._update_stage_position()
         self._update_head_info()
         self._update_exposure_settings()
+        
+            
+        # Set references to current position on startup
+        self.set_xy_reference()
+        self.set_z_reference()
 
     def _update_stage_position(self):
         """Update cached stage position."""
@@ -130,18 +143,49 @@ class CM30Controller:
 
     def move_z_rel(self, dz: float):
         """Move Z axis relative to current position."""
+        z_info = api.get_stage_z()
+        self.stage_z = z_info.get("z", 0)
         new_z = self.stage_z + dz
         print(f"Moving Z to {new_z:.4f}")
         try:
             api.z_move(new_z)
-            self.stage_z = new_z
+            self._wait_for_z_move()
         except Exception as e:
             print(f"Z move error: {e}")
+
+    def _wait_for_z_move(self, poll_interval: float = 0.05):
+        """Wait for Z movement to complete, updating stage_z while moving."""
+        while True:
+            try:
+                z_info = api.get_stage_z()
+                self.stage_z = z_info.get("z", self.stage_z)
+                if not z_info.get("is_moving", False):
+                    break
+                time.sleep(poll_interval)
+            except Exception as e:
+                print(f"Error polling Z position: {e}")
+                break
+
+    @property
+    def x_rel(self) -> int:
+        """Get X position relative to reference."""
+        return self.stage_x - self.x_ref
+
+    @property
+    def y_rel(self) -> int:
+        """Get Y position relative to reference."""
+        return self.stage_y - self.y_ref
 
     @property
     def z_rel(self) -> float:
         """Get Z position relative to reference plane."""
         return self.stage_z - self.z_ref
+
+    def set_xy_reference(self):
+        """Set current XY position as the reference."""
+        self.x_ref = self.stage_x
+        self.y_ref = self.stage_y
+        print(f"XY reference set to ({self.x_ref}, {self.y_ref}) (x_rel, y_rel now 0)")
 
     def set_z_reference(self):
         """Set current Z position as the reference plane."""
@@ -174,12 +218,12 @@ class CM30Controller:
         print(f"Light mode: {mode}")
 
     def do_autofocus(self):
-        """Perform autofocus."""
+        """Perform autofocus and wait for completion."""
         print("Autofocusing...")
         try:
             api.autofocus()
-            self._update_stage_position()
-            print(f"Focused at Z={self.stage_z}")
+            self._wait_for_z_move()
+            print(f"Autofocus complete at Z={self.stage_z:.4f}")
         except Exception as e:
             print(f"Autofocus error: {e}")
 
@@ -236,6 +280,93 @@ class CM30Controller:
         if now - self.last_head_info_update > self.head_info_update_interval:
             self._update_head_info()
             self.last_head_info_update = now
+
+    def _update_exposure_settings(self):
+        """Fetch current exposure settings from API."""
+        try:
+            settings = api.get_exposure_settings()
+            if isinstance(settings, dict):
+                self.exposure_mode = settings.get("mode", "manual")
+                self.iso = settings.get("iso_sensitivity", 100)
+                self.shutter_speed_denominator = settings.get("shutter_speed_denominator", 30)
+                self.exposure_locked = settings.get("is_locked", False)
+        except Exception as e:
+            print(f"Error getting exposure settings: {e}")
+
+    def set_exposure(self, iso: Optional[int] = None, shutter_speed: Optional[int] = None, mode: Optional[str] = None):
+        """Set exposure settings."""
+        if iso is not None:
+            self.iso = iso
+        if shutter_speed is not None:
+            self.shutter_speed_denominator = shutter_speed
+        if mode is not None:
+            self.exposure_mode = mode
+
+        try:
+            api.set_exposure_settings(
+                iso=self.iso,
+                shutter_speed_denominator=self.shutter_speed_denominator,
+                mode=self.exposure_mode
+            )
+            print(f"Exposure: ISO {self.iso}, 1/{self.shutter_speed_denominator}s, mode={self.exposure_mode}")
+        except Exception as e:
+            print(f"Error setting exposure: {e}")
+
+    def increase_iso(self):
+        """Increase ISO to next valid value."""
+        try:
+            idx = self.VALID_ISO.index(self.iso)
+            if idx < len(self.VALID_ISO) - 1:
+                self.set_exposure(iso=self.VALID_ISO[idx + 1])
+        except ValueError:
+            # Current ISO not in list, set to first valid
+            self.set_exposure(iso=self.VALID_ISO[0])
+
+    def decrease_iso(self):
+        """Decrease ISO to previous valid value."""
+        try:
+            idx = self.VALID_ISO.index(self.iso)
+            if idx > 0:
+                self.set_exposure(iso=self.VALID_ISO[idx - 1])
+        except ValueError:
+            self.set_exposure(iso=self.VALID_ISO[0])
+
+    def increase_shutter_speed(self):
+        """Increase shutter speed (shorter exposure, higher denominator)."""
+        try:
+            idx = self.VALID_SS_DENOMINATORS.index(self.shutter_speed_denominator)
+            if idx < len(self.VALID_SS_DENOMINATORS) - 1:
+                self.set_exposure(shutter_speed=self.VALID_SS_DENOMINATORS[idx + 1])
+        except ValueError:
+            self.set_exposure(shutter_speed=self.VALID_SS_DENOMINATORS[0])
+
+    def decrease_shutter_speed(self):
+        """Decrease shutter speed (longer exposure, lower denominator)."""
+        try:
+            idx = self.VALID_SS_DENOMINATORS.index(self.shutter_speed_denominator)
+            if idx > 0:
+                self.set_exposure(shutter_speed=self.VALID_SS_DENOMINATORS[idx - 1])
+        except ValueError:
+            self.set_exposure(shutter_speed=self.VALID_SS_DENOMINATORS[0])
+
+    def toggle_exposure_mode(self):
+        """Toggle between manual and continuous exposure mode."""
+        new_mode = "continuous" if self.exposure_mode == "manual" else "manual"
+        self.set_exposure(mode=new_mode)
+
+    def toggle_exposure_lock(self):
+        """Toggle exposure lock."""
+        try:
+            if self.exposure_locked:
+                api.exposure_unlock()
+                self.exposure_locked = False
+                print("Exposure unlocked")
+            else:
+                api.exposure_lock()
+                self.exposure_locked = True
+                print("Exposure locked")
+        except Exception as e:
+            print(f"Error toggling exposure lock: {e}")
 
     def capture_image(self):
         """Capture a single image and return as numpy array."""
@@ -461,6 +592,21 @@ class GUIManager:
             controller.set_light("led2_on")
         elif key == dpg.mvKey_0:
             controller.set_light("off")
+        # Exposure controls
+        elif key == dpg.mvKey_E:
+            shift = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
+            if shift:
+                controller.toggle_exposure_lock()
+            else:
+                controller.toggle_exposure_mode()
+        elif key == dpg.mvKey_Comma:  # < key (decrease shutter speed = longer exposure)
+            controller.decrease_shutter_speed()
+        elif key == dpg.mvKey_Period:  # > key (increase shutter speed = shorter exposure)
+            controller.increase_shutter_speed()
+        elif key == dpg.mvKey_Prior:  # Page Up (increase ISO)
+            controller.increase_iso()
+        elif key == dpg.mvKey_Next:  # Page Down (decrease ISO)
+            controller.decrease_iso()
         # Power saving
         elif key == dpg.mvKey_S:
             controller.toggle_power_saving()
@@ -470,7 +616,12 @@ class GUIManager:
         # Toggle metadata panel
         elif key == dpg.mvKey_I:
             controller.toggle_metadata_panel()
-        # Set Z reference (Ctrl+Shift+R)
+        # Set XY reference (Shift+X)
+        elif key == dpg.mvKey_X:
+            shift = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
+            if shift:
+                controller.set_xy_reference()
+        # Set Z reference (Shift+R)
         elif key == dpg.mvKey_R:
             shift = dpg.is_key_down(dpg.mvKey_LShift)
             if shift:

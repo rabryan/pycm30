@@ -13,11 +13,15 @@ def build_status_bar():
     with dpg.group(horizontal=True):
         dpg.add_text("X:", color=(150, 150, 150))
         dpg.add_text("0", tag="status_x")
+        dpg.add_text("rel:", color=(120, 120, 120))
+        dpg.add_text("0", tag="status_x_rel")
         dpg.add_text("Y:", color=(150, 150, 150))
         dpg.add_text("0", tag="status_y")
+        dpg.add_text("rel:", color=(120, 120, 120))
+        dpg.add_text("0", tag="status_y_rel")
         dpg.add_text("Z:", color=(150, 150, 150))
         dpg.add_text("0", tag="status_z")
-        dpg.add_text("Z_rel:", color=(150, 150, 150))
+        dpg.add_text("rel:", color=(120, 120, 120))
         dpg.add_text("0", tag="status_z_rel")
         dpg.add_spacer(width=10)
         dpg.add_text("XY:", color=(150, 150, 150))
@@ -64,8 +68,28 @@ def build_control_buttons(controller):
         dpg.add_button(label="16x", callback=lambda: controller.set_z_step_multiplier(16), width=40)
         dpg.add_button(label="32x", callback=lambda: controller.set_z_step_multiplier(32), width=40)
         dpg.add_spacer(width=20)
-        dpg.add_text("Z Ref:", color=(150, 150, 150))
-        dpg.add_button(label="Set (Ctrl+Shift+R)", callback=lambda: controller.set_z_reference())
+        dpg.add_text("Ref:", color=(150, 150, 150))
+        dpg.add_button(label="XY (Shift+X)", callback=lambda: controller.set_xy_reference())
+        dpg.add_button(label="Z (Shift+R)", callback=lambda: controller.set_z_reference())
+    # Exposure controls row
+    with dpg.group(horizontal=True):
+        dpg.add_text("Exposure:", color=(150, 150, 150))
+        dpg.add_text("ISO", color=(150, 150, 150))
+        dpg.add_button(label="-", callback=lambda: controller.decrease_iso(), width=30)
+        dpg.add_text("100", tag="status_iso", color=(200, 200, 255))
+        dpg.add_button(label="+", callback=lambda: controller.increase_iso(), width=30)
+        dpg.add_spacer(width=10)
+        dpg.add_text("Shutter", color=(150, 150, 150))
+        dpg.add_button(label="- (<)", callback=lambda: controller.decrease_shutter_speed(), width=45)
+        dpg.add_text("1/30", tag="status_shutter", color=(200, 200, 255))
+        dpg.add_button(label="+ (>)", callback=lambda: controller.increase_shutter_speed(), width=45)
+        dpg.add_spacer(width=10)
+        dpg.add_text("Mode:", color=(150, 150, 150))
+        dpg.add_button(label="Toggle (E)", tag="btn_exp_mode", callback=lambda: controller.toggle_exposure_mode())
+        dpg.add_text("manual", tag="status_exp_mode", color=(200, 200, 255))
+        dpg.add_spacer(width=10)
+        dpg.add_button(label="Lock (Shift+E)", tag="btn_exp_lock", callback=lambda: controller.toggle_exposure_lock())
+        dpg.add_text("unlocked", tag="status_exp_lock", color=(100, 255, 100))
 
 
 def build_help_section():
@@ -75,11 +99,16 @@ def build_help_section():
         dpg.add_text("U/D: Move Z up/down")
         dpg.add_text("+/-: Adjust XY move step")
         dpg.add_text("[/]: Adjust Z step (min 1.5625)")
-        dpg.add_text("Ctrl+Shift+R: Set Z reference plane")
+        dpg.add_text("Shift+X: Set XY reference position")
+        dpg.add_text("Shift+R: Set Z reference plane")
         dpg.add_text("H/L: High/Low resolution")
         dpg.add_text("F: Autofocus")
         dpg.add_text("P/O: Preview/Original capture mode")
         dpg.add_text("1/2/0: LED1/LED2/Off")
+        dpg.add_text("E: Toggle exposure mode")
+        dpg.add_text("Shift+E: Toggle exposure lock")
+        dpg.add_text("</> : Adjust shutter speed")
+        dpg.add_text("PgUp/PgDn: Adjust ISO")
         dpg.add_text("S: Toggle power saving")
         dpg.add_text("Space: Toggle live capture")
         dpg.add_text("I: Toggle image metadata")
@@ -123,6 +152,25 @@ def update_status(controller):
     dpg.set_value("status_x", f"{controller.stage_x}")
     dpg.set_value("status_y", f"{controller.stage_y}")
     dpg.set_value("status_z", f"{controller.stage_z:.2f}")
+
+    # Show x_rel with sign and color coding
+    x_rel = controller.x_rel
+    if x_rel >= 0:
+        dpg.set_value("status_x_rel", f"+{x_rel}")
+        dpg.configure_item("status_x_rel", color=(100, 200, 255))  # Blue for positive
+    else:
+        dpg.set_value("status_x_rel", f"{x_rel}")
+        dpg.configure_item("status_x_rel", color=(255, 200, 100))  # Orange for negative
+
+    # Show y_rel with sign and color coding
+    y_rel = controller.y_rel
+    if y_rel >= 0:
+        dpg.set_value("status_y_rel", f"+{y_rel}")
+        dpg.configure_item("status_y_rel", color=(100, 200, 255))  # Blue for positive
+    else:
+        dpg.set_value("status_y_rel", f"{y_rel}")
+        dpg.configure_item("status_y_rel", color=(255, 200, 100))  # Orange for negative
+
     # Show z_rel with sign and color coding
     z_rel = controller.z_rel
     if z_rel >= 0:
@@ -153,6 +201,9 @@ def update_status(controller):
         dpg.set_value("status_capture_enabled", "OFF")
         dpg.configure_item("status_capture_enabled", color=(255, 100, 100))
 
+    # Update exposure settings display
+    update_exposure_display(controller)
+
     # Update head info text
     if controller.head_info:
         head_info_lines = format_head_info(controller.head_info)
@@ -160,6 +211,34 @@ def update_status(controller):
 
     # Update metadata panel visibility and content
     update_metadata_panel(controller)
+
+
+def update_exposure_display(controller):
+    """Update the exposure settings display."""
+    # ISO
+    if dpg.does_item_exist("status_iso"):
+        dpg.set_value("status_iso", str(controller.iso))
+
+    # Shutter speed
+    if dpg.does_item_exist("status_shutter"):
+        dpg.set_value("status_shutter", f"1/{controller.shutter_speed_denominator}")
+
+    # Exposure mode
+    if dpg.does_item_exist("status_exp_mode"):
+        dpg.set_value("status_exp_mode", controller.exposure_mode)
+        if controller.exposure_mode == "manual":
+            dpg.configure_item("status_exp_mode", color=(200, 200, 255))
+        else:
+            dpg.configure_item("status_exp_mode", color=(255, 255, 100))
+
+    # Exposure lock status
+    if dpg.does_item_exist("status_exp_lock"):
+        if controller.exposure_locked:
+            dpg.set_value("status_exp_lock", "LOCKED")
+            dpg.configure_item("status_exp_lock", color=(255, 100, 100))
+        else:
+            dpg.set_value("status_exp_lock", "unlocked")
+            dpg.configure_item("status_exp_lock", color=(100, 255, 100))
 
 
 def update_metadata_panel(controller):
