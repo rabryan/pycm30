@@ -7,7 +7,8 @@ A real-time control panel for the Olympus CM30 incubation monitor.
 Keyboard Controls:
     Arrow Keys  - Move stage in X/Y direction
     U / D       - Move Z up / down
-    + / -       - Increase / decrease move step
+    + / -       - Increase / decrease XY move step
+    [ / ]       - Decrease / increase Z step (multiples of 1.5625)
     H / L       - Set high / low resolution
     F           - Autofocus
     P           - Switch to preview mode (faster, lower quality)
@@ -18,6 +19,7 @@ Keyboard Controls:
     S           - Toggle power saving mode
     Space       - Toggle continuous image capture
     I           - Toggle image metadata panel
+    Ctrl+Shift+R - Set current Z as reference plane
     R           - Reload UI (hot reload)
     Q / Escape  - Quit
 
@@ -48,11 +50,14 @@ from tools.controller.hot_reload import HotReloader
 class CM30Controller:
     """Controller for CM30 with DearPyGUI interface."""
 
+    # Z step minimum - all z_step values must be multiples of this
+    Z_STEP_MIN = 1.5625
+
     def __init__(self, hostname: str = "localhost", port: int = 8080):
         self.hostname = hostname
         self.port = port
         self.move_step = 500
-        self.z_step = 10
+        self.z_step = self.Z_STEP_MIN  # Default to minimum step
         self.image_capture_fun = api.get_image
         self.capture_mode = "full"
         self.running = True
@@ -64,6 +69,7 @@ class CM30Controller:
         self.stage_x = 0
         self.stage_y = 0
         self.stage_z = 0
+        self.z_ref = 0.0  # Reference Z plane for relative positioning
         self.light_mode = "off"
         self.power_saving = False
         self.capture_enabled = True  # Continuous capture on/off
@@ -73,6 +79,20 @@ class CM30Controller:
         self.image_metadata = {}  # EXIF/metadata from captured image
         self.show_metadata_panel = False
 
+        # Exposure settings
+        self.exposure_mode = "manual"  # 'manual' or 'continuous'
+        self.iso = 100
+        self.shutter_speed_denominator = 30  # 1/30 second
+        self.exposure_locked = False
+
+        # Valid values for exposure settings (from API)
+        self.VALID_SS_DENOMINATORS = [
+            8, 10, 13, 15, 20, 25, 30, 40, 50, 60, 80, 100, 125, 160, 200,
+            250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500,
+            3200, 4000, 5000, 6400, 8000
+        ]
+        self.VALID_ISO = [100, 200, 400, 800, 1600, 3200]
+
         # Initialize API connection
         print(f"Connecting to {hostname}:{port}")
         api.init(hostname, port)
@@ -80,9 +100,10 @@ class CM30Controller:
         api.set_light_params("off")
         api.set_resolution(self.image_width, self.image_height)
 
-        # Get initial stage position and head info
+        # Get initial stage position, head info, and exposure settings
         self._update_stage_position()
         self._update_head_info()
+        self._update_exposure_settings()
 
     def _update_stage_position(self):
         """Update cached stage position."""
@@ -107,15 +128,25 @@ class CM30Controller:
         except Exception as e:
             print(f"Move error: {e}")
 
-    def move_z_rel(self, dz: int):
+    def move_z_rel(self, dz: float):
         """Move Z axis relative to current position."""
         new_z = self.stage_z + dz
-        print(f"Moving Z to {new_z}")
+        print(f"Moving Z to {new_z:.4f}")
         try:
             api.z_move(new_z)
             self.stage_z = new_z
         except Exception as e:
             print(f"Z move error: {e}")
+
+    @property
+    def z_rel(self) -> float:
+        """Get Z position relative to reference plane."""
+        return self.stage_z - self.z_ref
+
+    def set_z_reference(self):
+        """Set current Z position as the reference plane."""
+        self.z_ref = self.stage_z
+        print(f"Z reference set to {self.z_ref:.4f} (z_rel now 0)")
 
     def set_resolution(self, high: bool):
         """Set image resolution."""
@@ -166,6 +197,28 @@ class CM30Controller:
         """Toggle continuous image capture on/off."""
         self.capture_enabled = not self.capture_enabled
         print(f"Continuous capture: {'ON' if self.capture_enabled else 'OFF'}")
+
+    def increase_z_step(self):
+        """Increase Z step by one minimum step unit."""
+        self.z_step += self.Z_STEP_MIN
+        # Round to avoid floating point errors
+        self.z_step = round(self.z_step / self.Z_STEP_MIN) * self.Z_STEP_MIN
+        print(f"Z step: {self.z_step:.4f}")
+
+    def decrease_z_step(self):
+        """Decrease Z step by one minimum step unit (minimum is Z_STEP_MIN)."""
+        new_step = self.z_step - self.Z_STEP_MIN
+        if new_step >= self.Z_STEP_MIN:
+            self.z_step = round(new_step / self.Z_STEP_MIN) * self.Z_STEP_MIN
+        else:
+            self.z_step = self.Z_STEP_MIN
+        print(f"Z step: {self.z_step:.4f}")
+
+    def set_z_step_multiplier(self, multiplier: int):
+        """Set Z step to a specific multiple of the minimum step."""
+        if multiplier >= 1:
+            self.z_step = self.Z_STEP_MIN * multiplier
+            print(f"Z step: {self.z_step:.4f} ({multiplier}x)")
 
     def _update_head_info(self):
         """Update head info from API."""
@@ -376,13 +429,18 @@ class GUIManager:
             controller.move_z_rel(controller.z_step)
         elif key == dpg.mvKey_D:
             controller.move_z_rel(-controller.z_step)
-        # Step size
+        # XY Step size
         elif key == dpg.mvKey_Plus:
             controller.move_step += 100
             print(f"Move step: {controller.move_step}")
         elif key == dpg.mvKey_Minus:
             controller.move_step = max(10, controller.move_step - 100)
             print(f"Move step: {controller.move_step}")
+        # Z Step size ([ and ] keys)
+        elif key == dpg.mvKey_Open_Brace:
+            controller.decrease_z_step()
+        elif key == dpg.mvKey_Close_Brace:
+            controller.increase_z_step()
         # Resolution
         elif key == dpg.mvKey_H:
             controller.set_resolution(high=True)
@@ -412,10 +470,15 @@ class GUIManager:
         # Toggle metadata panel
         elif key == dpg.mvKey_I:
             controller.toggle_metadata_panel()
-        # Hot reload
+        # Set Z reference (Ctrl+Shift+R)
         elif key == dpg.mvKey_R:
-            print("[hot-reload] Manual reload triggered")
-            self.hot_reloader.trigger_reload()
+            shift = dpg.is_key_down(dpg.mvKey_LShift)
+            if shift:
+                controller.set_z_reference()
+            else:
+                # Hot reload (just R)
+                print("[hot-reload] Manual reload triggered")
+                self.hot_reloader.trigger_reload()
         # Quit
         elif key == dpg.mvKey_Q or key == dpg.mvKey_Escape:
             controller.running = False

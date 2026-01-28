@@ -89,7 +89,21 @@ def z_move(z):
     r = requests.post(url, json= {'z': z, 'z_mode': 'absolute'})
     return r
 
+"""
+{'z.range': [330, 3580, 1.5625],
+ 'z_mode.enum': ['absolute', 'relative'],
+ 'z_focus.range': [430, 3480, 1.5625],
+ 'z_focus_offset.range': [-100, 100, 1.5625],
+ 'z': 2814.375,
+ 'is_moving': False,
+ 'z_focus_mode.enum': ['high_accuracy', 'high_speed']}
+"""
 def get_stage_z(): return _api_get('stage_z')
+
+def get_z_range():
+    """" return [zmin, zmax, zstep] """
+    z_info = get_stage_z()
+    return z_info['z.range']
 
 def reboot(): return _api_post('power.reboot', {'sleep_sec':1})
 
@@ -112,7 +126,7 @@ def get_light_params(): return _api_get('light')
 def set_light_params(mode='led1_on'): 
     return _api_put('light', {'mode': mode})
 
-def set_exposure_settings(iso=100, shutter_speed_denominator=20, mode='manual'):
+def set_exposure_settings(iso=100, shutter_speed_denominator=20, mode='manual', **additional_settings):
 
     d = {
       "iso_sensitivity": iso,
@@ -120,7 +134,52 @@ def set_exposure_settings(iso=100, shutter_speed_denominator=20, mode='manual'):
       "shutter_speed_denominator": shutter_speed_denominator
     }
 
+    if additional_settings:
+        d.update(additional_settings)
+
     return _api_put('exposure', d)
+"""
+
+{'mode.enum': ['continuous', 'manual'],
+ 'mode': 'continuous',
+ 'shutter_speed_denominator.enum': [8,
+  10,
+  13,
+  15,
+  20,
+  25,
+  30,
+  40,
+  50,
+  60,
+  80,
+  100,
+  125,
+  160,
+  200,
+  250,
+  320,
+  400,
+  500,
+  640,
+  800,
+  1000,
+  1250,
+  1600,
+  2000,
+  2500,
+  3200,
+  4000,
+  5000,
+  6400,
+  8000],
+ 'shutter_speed_denominator': 15,
+ 'iso_sensitivity.enum': [100, 125, 160, 200, 250, 320, 400, 500, 640, 800],
+ 'iso_sensitivity': 100,
+ 'is_locking': False}
+"""
+def get_exposure_settings():
+    return _api_get('exposure')
 
 def exposure_lock(): return _api_post('exposure.lock')
 

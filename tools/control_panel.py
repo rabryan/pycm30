@@ -13,8 +13,9 @@ if len(sys.argv) == 2:
 else:
     host='localhost'
 
+port=8001
 print(f'connecting to {host}')
-init(host)
+init(host, port=port)
 set_power_saving(False)
 set_light_params('off')
 root = Tk()
