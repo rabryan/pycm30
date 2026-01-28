@@ -56,7 +56,6 @@ def get_image():
         r = requests.post(url)
 
     b = BytesIO(r.content)
-    print(len(r.content))
     img = Image.open(b)
     return img
 
@@ -69,7 +68,6 @@ def get_image_preview():
         r = requests.get(url)
 
     b = BytesIO(r.content)
-    print(len(r.content))
     img = Image.open(b)
     return img
 
