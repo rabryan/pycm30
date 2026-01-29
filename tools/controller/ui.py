@@ -57,6 +57,8 @@ def build_control_buttons(controller):
         dpg.add_button(label="Power Save (S)", callback=lambda: controller.toggle_power_saving())
         dpg.add_button(label="Live (Space)", callback=lambda: controller.toggle_capture())
         dpg.add_button(label="Metadata (I)", callback=lambda: controller.toggle_metadata_panel())
+        dpg.add_button(label="Adjustments (A)", callback=lambda: controller.toggle_adjustments_panel())
+        dpg.add_button(label="Stats (T)", callback=lambda: controller.toggle_stats_panel())
     with dpg.group(horizontal=True):
         dpg.add_text("Z Step:", color=(150, 150, 150))
         dpg.add_button(label="- ([)", callback=lambda: controller.decrease_z_step(), width=50)
@@ -112,6 +114,8 @@ def build_help_section():
         dpg.add_text("S: Toggle power saving")
         dpg.add_text("Space: Toggle live capture")
         dpg.add_text("I: Toggle image metadata")
+        dpg.add_text("A: Toggle image adjustments")
+        dpg.add_text("T: Toggle image statistics")
         dpg.add_text("R: Reload UI (hot reload)")
         dpg.add_text("Q/Esc: Quit")
 
@@ -130,6 +134,147 @@ def build_metadata_panel():
             dpg.add_text("No image captured yet", tag="metadata_text", wrap=500)
 
 
+def build_adjustments_panel(controller):
+    """Build the image adjustments panel (initially hidden)."""
+    with dpg.group(tag="adjustments_panel", show=False):
+        dpg.add_separator()
+        with dpg.collapsing_header(label="Image Adjustments (A)", default_open=True):
+            # Brightness slider (-1.0 to 1.0, default 0.0)
+            with dpg.group(horizontal=True):
+                dpg.add_text("Brightness:", color=(150, 150, 150), indent=10)
+                dpg.add_slider_float(
+                    tag="slider_brightness",
+                    default_value=0.0,
+                    min_value=-1.0,
+                    max_value=1.0,
+                    width=200,
+                    callback=lambda s, a: controller.set_brightness(a)
+                )
+                dpg.add_text("0.00", tag="val_brightness")
+
+            # Contrast slider (0.5 to 2.0, default 1.0)
+            with dpg.group(horizontal=True):
+                dpg.add_text("Contrast:  ", color=(150, 150, 150), indent=10)
+                dpg.add_slider_float(
+                    tag="slider_contrast",
+                    default_value=1.0,
+                    min_value=0.5,
+                    max_value=2.0,
+                    width=200,
+                    callback=lambda s, a: controller.set_contrast(a)
+                )
+                dpg.add_text("1.00", tag="val_contrast")
+
+            # Saturation slider (0.0 to 2.0, default 1.0)
+            with dpg.group(horizontal=True):
+                dpg.add_text("Saturation:", color=(150, 150, 150), indent=10)
+                dpg.add_slider_float(
+                    tag="slider_saturation",
+                    default_value=1.0,
+                    min_value=0.0,
+                    max_value=2.0,
+                    width=200,
+                    callback=lambda s, a: controller.set_saturation(a)
+                )
+                dpg.add_text("1.00", tag="val_saturation")
+
+            # Gamma slider (0.5 to 2.0, default 1.0)
+            with dpg.group(horizontal=True):
+                dpg.add_text("Gamma:     ", color=(150, 150, 150), indent=10)
+                dpg.add_slider_float(
+                    tag="slider_gamma",
+                    default_value=1.0,
+                    min_value=0.5,
+                    max_value=2.0,
+                    width=200,
+                    callback=lambda s, a: controller.set_gamma(a)
+                )
+                dpg.add_text("1.00", tag="val_gamma")
+
+            # Reset button
+            dpg.add_button(
+                label="Reset All",
+                callback=lambda: _reset_adjustments(controller)
+            )
+
+
+def _reset_adjustments(controller):
+    """Reset all adjustments and update sliders."""
+    controller.reset_adjustments()
+    # Update sliders to default values
+    if dpg.does_item_exist("slider_brightness"):
+        dpg.set_value("slider_brightness", 0.0)
+    if dpg.does_item_exist("slider_contrast"):
+        dpg.set_value("slider_contrast", 1.0)
+    if dpg.does_item_exist("slider_saturation"):
+        dpg.set_value("slider_saturation", 1.0)
+    if dpg.does_item_exist("slider_gamma"):
+        dpg.set_value("slider_gamma", 1.0)
+
+
+def build_stats_panel():
+    """Build the image statistics panel (initially hidden)."""
+    with dpg.group(tag="stats_panel", show=False):
+        dpg.add_separator()
+        with dpg.collapsing_header(label="Image Statistics (T)", default_open=True):
+            # Brightness section
+            dpg.add_text("Brightness", color=(150, 200, 255))
+            with dpg.group(horizontal=True):
+                dpg.add_text("  Mean:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_mean")
+                dpg.add_text("Median:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_median")
+                dpg.add_text("Std:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_std")
+            with dpg.group(horizontal=True):
+                dpg.add_text("  Min:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_min")
+                dpg.add_text("Max:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_max")
+                dpg.add_text("Range:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_dynamic_range")
+
+            # Contrast section
+            dpg.add_text("Contrast", color=(150, 200, 255))
+            with dpg.group(horizontal=True):
+                dpg.add_text("  Michelson:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_michelson")
+                dpg.add_text("RMS:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_rms")
+                dpg.add_text("Eff. Range (5-95%):", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_eff_range")
+
+            # Focus section
+            dpg.add_text("Focus Quality", color=(150, 200, 255))
+            with dpg.group(horizontal=True):
+                dpg.add_text("  Laplacian Var:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_laplacian")
+                dpg.add_text("Gradient Mean:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_gradient")
+
+            # Histogram section
+            dpg.add_text("Histogram Analysis", color=(150, 200, 255))
+            with dpg.group(horizontal=True):
+                dpg.add_text("  Entropy:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_entropy")
+                dpg.add_text("(bits, max=8)", color=(80, 80, 80))
+            with dpg.group(horizontal=True):
+                dpg.add_text("  Underexposed:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_underexp")
+                dpg.add_text("Overexposed:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_overexp")
+
+            # Distribution section
+            dpg.add_text("Distribution", color=(150, 200, 255))
+            with dpg.group(horizontal=True):
+                dpg.add_text("  Skewness:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_skewness")
+                dpg.add_text("(0=symmetric)", color=(80, 80, 80))
+                dpg.add_text("Kurtosis:", color=(120, 120, 120))
+                dpg.add_text("--", tag="stat_kurtosis")
+                dpg.add_text("(3=normal)", color=(80, 80, 80))
+
+
 def build_main_window(controller):
     """Build the main application window."""
     with dpg.window(label="CM30 Control Panel", tag="main_window"):
@@ -140,6 +285,8 @@ def build_main_window(controller):
         build_help_section()
         build_head_info_section()
         build_metadata_panel()
+        build_adjustments_panel(controller)
+        build_stats_panel()
         dpg.add_separator()
 
         # Image display container (texture added dynamically)
@@ -212,6 +359,12 @@ def update_status(controller):
     # Update metadata panel visibility and content
     update_metadata_panel(controller)
 
+    # Update adjustments panel visibility and values
+    update_adjustments_panel(controller)
+
+    # Update stats panel visibility and values
+    update_stats_panel(controller)
+
 
 def update_exposure_display(controller):
     """Update the exposure settings display."""
@@ -252,6 +405,93 @@ def update_metadata_panel(controller):
         metadata_text = format_metadata(controller.image_metadata)
         if dpg.does_item_exist("metadata_text"):
             dpg.set_value("metadata_text", metadata_text)
+
+
+def update_adjustments_panel(controller):
+    """Update the adjustments panel visibility and value labels."""
+    # Toggle panel visibility
+    if dpg.does_item_exist("adjustments_panel"):
+        dpg.configure_item("adjustments_panel", show=controller.show_adjustments_panel)
+
+    # Update value labels
+    if controller.show_adjustments_panel:
+        if dpg.does_item_exist("val_brightness"):
+            dpg.set_value("val_brightness", f"{controller.brightness:.2f}")
+        if dpg.does_item_exist("val_contrast"):
+            dpg.set_value("val_contrast", f"{controller.contrast:.2f}")
+        if dpg.does_item_exist("val_saturation"):
+            dpg.set_value("val_saturation", f"{controller.saturation:.2f}")
+        if dpg.does_item_exist("val_gamma"):
+            dpg.set_value("val_gamma", f"{controller.gamma:.2f}")
+
+
+def update_stats_panel(controller):
+    """Update the image statistics panel visibility and values."""
+    # Toggle panel visibility
+    if dpg.does_item_exist("stats_panel"):
+        dpg.configure_item("stats_panel", show=controller.show_stats_panel)
+
+    # Update stat values if panel is visible and we have stats
+    if controller.show_stats_panel and controller.image_stats:
+        stats = controller.image_stats
+
+        # Brightness stats
+        _set_stat("stat_mean", stats.get("mean"), "{:.1f}")
+        _set_stat("stat_median", stats.get("median"), "{:.1f}")
+        _set_stat("stat_std", stats.get("std"), "{:.1f}")
+        _set_stat("stat_min", stats.get("min"), "{:.0f}")
+        _set_stat("stat_max", stats.get("max"), "{:.0f}")
+        _set_stat("stat_dynamic_range", stats.get("dynamic_range"), "{:.0f}")
+
+        # Contrast stats
+        _set_stat("stat_michelson", stats.get("michelson_contrast"), "{:.3f}")
+        _set_stat("stat_rms", stats.get("rms_contrast"), "{:.3f}")
+        _set_stat("stat_eff_range", stats.get("effective_range"), "{:.1f}")
+
+        # Focus stats
+        _set_stat("stat_laplacian", stats.get("laplacian_var"), "{:.1f}")
+        _set_stat("stat_gradient", stats.get("gradient_mean"), "{:.2f}")
+
+        # Histogram stats
+        _set_stat("stat_entropy", stats.get("entropy"), "{:.2f}")
+        _set_stat("stat_underexp", stats.get("pct_underexposed"), "{:.1f}%")
+        _set_stat("stat_overexp", stats.get("pct_overexposed"), "{:.1f}%")
+
+        # Distribution stats
+        _set_stat("stat_skewness", stats.get("skewness"), "{:.2f}")
+        _set_stat("stat_kurtosis", stats.get("kurtosis"), "{:.2f}")
+
+        # Color code exposure warnings
+        if stats.get("pct_underexposed", 0) > 5:
+            dpg.configure_item("stat_underexp", color=(255, 150, 100))
+        else:
+            dpg.configure_item("stat_underexp", color=(100, 255, 100))
+
+        if stats.get("pct_overexposed", 0) > 5:
+            dpg.configure_item("stat_overexp", color=(255, 150, 100))
+        else:
+            dpg.configure_item("stat_overexp", color=(100, 255, 100))
+
+        # Color code focus quality (higher is better)
+        laplacian = stats.get("laplacian_var", 0)
+        if laplacian > 500:
+            dpg.configure_item("stat_laplacian", color=(100, 255, 100))  # Good focus
+        elif laplacian > 100:
+            dpg.configure_item("stat_laplacian", color=(255, 255, 100))  # Moderate
+        else:
+            dpg.configure_item("stat_laplacian", color=(255, 150, 100))  # Poor focus
+
+
+def _set_stat(tag: str, value, fmt: str):
+    """Helper to set a stat value with formatting."""
+    if dpg.does_item_exist(tag):
+        if value is not None:
+            if fmt.endswith("%"):
+                dpg.set_value(tag, fmt.format(value))
+            else:
+                dpg.set_value(tag, fmt.format(value))
+        else:
+            dpg.set_value(tag, "--")
 
 
 def format_metadata(metadata: dict) -> str:

@@ -23,6 +23,8 @@ Keyboard Controls:
     S           - Toggle power saving mode
     Space       - Toggle continuous image capture
     I           - Toggle image metadata panel
+    A           - Toggle image adjustments panel
+    T           - Toggle image statistics panel
     Shift+X     - Set current XY as reference position
     Shift+R     - Set current Z as reference plane
     R           - Reload UI (hot reload)
@@ -100,6 +102,17 @@ class CM30Controller:
             3200, 4000, 5000, 6400, 8000
         ]
         self.VALID_ISO = [100, 125, 160, 200, 250, 320, 400, 500, 640, 800]
+
+        # Image adjustment settings (display only, not camera)
+        self.show_adjustments_panel = False
+        self.brightness = 0.0  # -1.0 to 1.0
+        self.contrast = 1.0    # 0.5 to 2.0
+        self.saturation = 1.0  # 0.0 to 2.0
+        self.gamma = 1.0       # 0.5 to 2.0
+
+        # Image statistics panel
+        self.show_stats_panel = False
+        self.image_stats = {}  # Computed image statistics
 
         # Initialize API connection
         print(f"Connecting to {hostname}:{port}")
@@ -452,6 +465,186 @@ class CM30Controller:
         self.show_metadata_panel = not self.show_metadata_panel
         print(f"Metadata panel: {'visible' if self.show_metadata_panel else 'hidden'}")
 
+    def toggle_adjustments_panel(self):
+        """Toggle the image adjustments panel visibility."""
+        self.show_adjustments_panel = not self.show_adjustments_panel
+        print(f"Adjustments panel: {'visible' if self.show_adjustments_panel else 'hidden'}")
+
+    def toggle_stats_panel(self):
+        """Toggle the image statistics panel visibility."""
+        self.show_stats_panel = not self.show_stats_panel
+        print(f"Stats panel: {'visible' if self.show_stats_panel else 'hidden'}")
+
+    def compute_image_stats(self, img_array: np.ndarray):
+        """Compute statistics for a grayscale microscope image.
+
+        Computes metrics useful for microscopy:
+        - Brightness stats (mean, median, std, min, max)
+        - Contrast metrics (Michelson, RMS, dynamic range)
+        - Focus quality (Laplacian variance, gradient magnitude)
+        - Histogram analysis (entropy, percentiles, saturation)
+        - Distribution shape (skewness, kurtosis)
+        """
+        # Convert to grayscale (0-255 range for stats)
+        if img_array.shape[2] >= 3:
+            # Use luminance weights for grayscale conversion
+            gray = (0.299 * img_array[:, :, 0] +
+                    0.587 * img_array[:, :, 1] +
+                    0.114 * img_array[:, :, 2])
+        else:
+            gray = img_array[:, :, 0]
+
+        # Convert to 0-255 range for intuitive values
+        gray_255 = (gray * 255).astype(np.float32)
+        flat = gray_255.flatten()
+
+        stats = {}
+
+        # === Brightness Statistics ===
+        stats["mean"] = float(np.mean(flat))
+        stats["median"] = float(np.median(flat))
+        stats["std"] = float(np.std(flat))
+        stats["min"] = float(np.min(flat))
+        stats["max"] = float(np.max(flat))
+
+        # === Percentiles (useful for effective dynamic range) ===
+        stats["p5"] = float(np.percentile(flat, 5))
+        stats["p95"] = float(np.percentile(flat, 95))
+        stats["effective_range"] = stats["p95"] - stats["p5"]
+
+        # === Contrast Metrics ===
+        # Dynamic range
+        stats["dynamic_range"] = stats["max"] - stats["min"]
+
+        # Michelson contrast: (max - min) / (max + min)
+        if (stats["max"] + stats["min"]) > 0:
+            stats["michelson_contrast"] = (stats["max"] - stats["min"]) / (stats["max"] + stats["min"])
+        else:
+            stats["michelson_contrast"] = 0.0
+
+        # RMS contrast (normalized std)
+        stats["rms_contrast"] = stats["std"] / 255.0
+
+        # === Saturation Detection ===
+        stats["pct_underexposed"] = float(np.sum(flat < 5) / len(flat) * 100)
+        stats["pct_overexposed"] = float(np.sum(flat > 250) / len(flat) * 100)
+
+        # === Entropy (information content) ===
+        # Higher entropy = more detail/texture
+        hist, _ = np.histogram(flat, bins=256, range=(0, 256))
+        hist = hist / hist.sum()  # Normalize to probabilities
+        hist = hist[hist > 0]  # Remove zeros for log
+        stats["entropy"] = float(-np.sum(hist * np.log2(hist)))
+
+        # === Focus/Sharpness Metrics ===
+        # Laplacian variance - higher = sharper/more in focus
+        # Use simple 3x3 Laplacian kernel
+        laplacian_kernel = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float32)
+        # Convolve manually (simple implementation)
+        h, w = gray_255.shape
+        if h > 4 and w > 4:
+            # Pad and convolve
+            padded = np.pad(gray_255, 1, mode='edge')
+            laplacian = np.zeros_like(gray_255)
+            for i in range(3):
+                for j in range(3):
+                    laplacian += laplacian_kernel[i, j] * padded[i:i+h, j:j+w]
+            stats["laplacian_var"] = float(np.var(laplacian))
+            stats["focus_measure"] = float(np.var(laplacian))  # Alias for clarity
+        else:
+            stats["laplacian_var"] = 0.0
+            stats["focus_measure"] = 0.0
+
+        # Gradient magnitude (edge strength) - Sobel-like
+        if h > 2 and w > 2:
+            gx = gray_255[:, 2:] - gray_255[:, :-2]  # Horizontal gradient
+            gy = gray_255[2:, :] - gray_255[:-2, :]  # Vertical gradient
+            # Match dimensions
+            gx = gx[1:-1, :]
+            gy = gy[:, 1:-1]
+            gradient_mag = np.sqrt(gx**2 + gy**2)
+            stats["gradient_mean"] = float(np.mean(gradient_mag))
+            stats["gradient_std"] = float(np.std(gradient_mag))
+        else:
+            stats["gradient_mean"] = 0.0
+            stats["gradient_std"] = 0.0
+
+        # === Distribution Shape ===
+        # Skewness (asymmetry: 0=symmetric, >0=right tail, <0=left tail)
+        if stats["std"] > 0:
+            stats["skewness"] = float(np.mean(((flat - stats["mean"]) / stats["std"]) ** 3))
+            # Kurtosis (peakedness: 3=normal, >3=peaked, <3=flat)
+            stats["kurtosis"] = float(np.mean(((flat - stats["mean"]) / stats["std"]) ** 4))
+        else:
+            stats["skewness"] = 0.0
+            stats["kurtosis"] = 0.0
+
+        self.image_stats = stats
+
+    def set_brightness(self, value: float):
+        """Set brightness adjustment (-1.0 to 1.0)."""
+        self.brightness = max(-1.0, min(1.0, value))
+
+    def set_contrast(self, value: float):
+        """Set contrast adjustment (0.5 to 2.0)."""
+        self.contrast = max(0.5, min(2.0, value))
+
+    def set_saturation(self, value: float):
+        """Set saturation adjustment (0.0 to 2.0)."""
+        self.saturation = max(0.0, min(2.0, value))
+
+    def set_gamma(self, value: float):
+        """Set gamma adjustment (0.5 to 2.0)."""
+        self.gamma = max(0.5, min(2.0, value))
+
+    def reset_adjustments(self):
+        """Reset all image adjustments to defaults."""
+        self.brightness = 0.0
+        self.contrast = 1.0
+        self.saturation = 1.0
+        self.gamma = 1.0
+        print("Image adjustments reset")
+
+    def apply_adjustments(self, img_array: np.ndarray) -> np.ndarray:
+        """Apply brightness, contrast, saturation, and gamma adjustments to image."""
+        # Skip if all defaults
+        if (self.brightness == 0.0 and self.contrast == 1.0 and
+            self.saturation == 1.0 and self.gamma == 1.0):
+            return img_array
+
+        result = img_array.copy()
+
+        # Separate RGB and alpha
+        rgb = result[:, :, :3]
+        alpha = result[:, :, 3:4] if result.shape[2] == 4 else None
+
+        # Apply brightness (add to all channels)
+        if self.brightness != 0.0:
+            rgb = rgb + self.brightness
+
+        # Apply contrast (scale around 0.5 midpoint)
+        if self.contrast != 1.0:
+            rgb = (rgb - 0.5) * self.contrast + 0.5
+
+        # Apply saturation (blend with grayscale)
+        if self.saturation != 1.0:
+            gray = np.mean(rgb, axis=2, keepdims=True)
+            rgb = gray + self.saturation * (rgb - gray)
+
+        # Apply gamma correction
+        if self.gamma != 1.0:
+            rgb = np.clip(rgb, 0, 1)
+            rgb = np.power(rgb, 1.0 / self.gamma)
+
+        # Clamp values and recombine
+        rgb = np.clip(rgb, 0, 1)
+        if alpha is not None:
+            result = np.concatenate([rgb, alpha], axis=2)
+        else:
+            result = rgb
+
+        return result.astype(np.float32)
+
     def image_capture_thread(self):
         """Background thread for continuous image capture."""
         while self.running:
@@ -616,6 +809,12 @@ class GUIManager:
         # Toggle metadata panel
         elif key == dpg.mvKey_I:
             controller.toggle_metadata_panel()
+        # Toggle adjustments panel
+        elif key == dpg.mvKey_A:
+            controller.toggle_adjustments_panel()
+        # Toggle stats panel
+        elif key == dpg.mvKey_T:
+            controller.toggle_stats_panel()
         # Set XY reference (Shift+X)
         elif key == dpg.mvKey_X:
             shift = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
@@ -704,7 +903,13 @@ def create_gui(controller: CM30Controller, enable_hot_reload: bool = True):
                         dpg.delete_item(child)
                 gui_manager.placeholder_removed = True
 
-            gui_manager.create_or_update_texture(img_array)
+            # Apply image adjustments (brightness, contrast, etc.)
+            adjusted_array = controller.apply_adjustments(img_array)
+            gui_manager.create_or_update_texture(adjusted_array)
+
+            # Compute image statistics if panel is visible
+            if controller.show_stats_panel:
+                controller.compute_image_stats(img_array)
 
         # Periodically update head info
         controller.maybe_update_head_info()
