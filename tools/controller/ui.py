@@ -17,6 +17,9 @@ OVERLAY_RANGE_COLOR = (80, 80, 80, 255)
 OVERLAY_FOV_COLOR = (100, 200, 255, 200)
 OVERLAY_REF_COLOR = (255, 200, 100, 150)
 
+# Stitch canvas dimensions (slightly smaller to fit within overlay with border)
+STITCH_CANVAS_SIZE = 180
+
 
 def build_status_bar():
     """Build the status bar at the top of the window."""
@@ -107,13 +110,35 @@ def build_control_buttons(controller):
 def build_help_section():
     """Build the collapsible help section."""
     with dpg.collapsing_header(label="Keyboard Shortcuts", default_open=False):
+        dpg.add_text("-- Movement --", color=(150, 200, 255))
         dpg.add_text("Arrow Keys: Move stage XY")
         dpg.add_text("U/D: Move Z up/down")
         dpg.add_text("+/-: Adjust XY move step")
         dpg.add_text("[/]: Adjust Z step (min 1.5625)")
         dpg.add_text("Shift+X: Set XY reference position")
         dpg.add_text("Shift+R: Set Z reference plane")
+        dpg.add_text("-- Overlay/View --", color=(150, 200, 255))
         dpg.add_text("C: Center overlay range on current position")
+        dpg.add_text("W: Toggle quality indicators")
+        dpg.add_text("-- Stitching --", color=(150, 200, 255))
+        dpg.add_text("G: Toggle auto-stitch (Grab tiles as you move)")
+        dpg.add_text("B: Capture current position as stitch tile (Build)")
+        dpg.add_text("Shift+N: Clear all stitch tiles (New)")
+        dpg.add_text("V: Fit view range to captured tiles (View)")
+        dpg.add_text("-- Grid Scan --", color=(150, 200, 255))
+        dpg.add_text("F5: Start/Pause grid scan")
+        dpg.add_text("F6: Cancel grid scan")
+        dpg.add_text("-- Z-Stack --", color=(150, 200, 255))
+        dpg.add_text("Z: Toggle Z-stack mode")
+        dpg.add_text("Shift+Z: Capture Z-stack at current position")
+        dpg.add_text("-- Session --", color=(150, 200, 255))
+        dpg.add_text("F2: Save session")
+        dpg.add_text("F3: Load session")
+        dpg.add_text("-- Well Plate --", color=(150, 200, 255))
+        dpg.add_text("F7: Scan reference labels")
+        dpg.add_text("F8: Compute plate alignment")
+        dpg.add_text("F9: Show alignment report")
+        dpg.add_text("-- Camera --", color=(150, 200, 255))
         dpg.add_text("H/L: High/Low resolution")
         dpg.add_text("F: Autofocus")
         dpg.add_text("P/O: Preview/Original capture mode")
@@ -122,11 +147,13 @@ def build_help_section():
         dpg.add_text("Shift+E: Toggle exposure lock")
         dpg.add_text("</> : Adjust shutter speed")
         dpg.add_text("PgUp/PgDn: Adjust ISO")
+        dpg.add_text("-- Panels --", color=(150, 200, 255))
         dpg.add_text("S: Toggle power saving")
         dpg.add_text("Space: Toggle live capture")
         dpg.add_text("I: Toggle image metadata")
         dpg.add_text("A: Toggle image adjustments")
         dpg.add_text("T: Toggle image statistics")
+        dpg.add_text("-- System --", color=(150, 200, 255))
         dpg.add_text("R: Reload UI (hot reload)")
         dpg.add_text("Q/Esc: Quit")
 
@@ -286,16 +313,51 @@ def build_stats_panel():
                 dpg.add_text("(3=normal)", color=(80, 80, 80))
 
 
+def _on_overlay_click(sender, app_data, user_data):
+    """Handle click on the overlay for ROI navigation."""
+    controller = user_data
+    if not controller or not controller.roi_click_enabled:
+        return
+
+    # Get mouse position relative to overlay
+    mouse_pos = dpg.get_mouse_pos(local=False)
+    item_pos = dpg.get_item_pos("position_overlay")
+
+    if item_pos is None:
+        return
+
+    click_x = mouse_pos[0] - item_pos[0]
+    click_y = mouse_pos[1] - item_pos[1]
+
+    # Check if click is within overlay bounds
+    if 0 <= click_x <= OVERLAY_WIDTH and 0 <= click_y <= OVERLAY_HEIGHT:
+        # Account for padding
+        effective_x = click_x - OVERLAY_PADDING
+        effective_y = click_y - OVERLAY_PADDING
+        effective_width = OVERLAY_WIDTH - 2 * OVERLAY_PADDING
+        effective_height = OVERLAY_HEIGHT - 2 * OVERLAY_PADDING
+
+        if effective_x >= 0 and effective_y >= 0:
+            controller.navigate_to_overlay_position(
+                effective_x, effective_y,
+                effective_width, effective_height
+            )
+
+
 def build_position_overlay(controller):
     """Build the XY position overlay showing current position within max range."""
     with dpg.group(tag="position_overlay_group"):
-        dpg.add_text("XY Position", color=(150, 150, 150))
+        dpg.add_text("XY Position / Stitch Map (click to navigate)", color=(150, 150, 150))
         # Create a drawlist for the position visualization
         with dpg.drawlist(
             width=OVERLAY_WIDTH,
             height=OVERLAY_HEIGHT,
             tag="position_overlay"
         ):
+            # Register click handler
+            with dpg.item_handler_registry(tag="overlay_click_handler"):
+                dpg.add_item_clicked_handler(callback=_on_overlay_click, user_data=controller)
+            dpg.bind_item_handler_registry("position_overlay", "overlay_click_handler")
             # Background
             dpg.draw_rectangle(
                 (0, 0),
@@ -345,6 +407,126 @@ def build_position_overlay(controller):
         with dpg.group(horizontal=True):
             dpg.add_text("Range:", color=(100, 100, 100))
             dpg.add_text("--", tag="overlay_range_text", color=(150, 150, 150))
+
+        # Stitch controls section
+        dpg.add_separator()
+        dpg.add_text("Stitching", color=(150, 150, 150))
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Auto",
+                tag="btn_auto_stitch",
+                callback=lambda: controller.toggle_auto_stitch(),
+                width=45
+            )
+            dpg.add_text("OFF", tag="status_auto_stitch", color=(150, 150, 150))
+            dpg.add_button(
+                label="Capture",
+                callback=lambda: controller.capture_stitch_tile(),
+                width=55
+            )
+            dpg.add_button(
+                label="Clear",
+                callback=lambda: controller.clear_stitch_tiles(),
+                width=45
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Fit",
+                callback=lambda: controller.fit_range_to_tiles(),
+                width=35
+            )
+            dpg.add_button(
+                label="Export",
+                callback=lambda: controller.export_stitch_preview(),
+                width=50
+            )
+            dpg.add_button(
+                label="Quality",
+                callback=lambda: controller.toggle_quality_display(),
+                width=55
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("Tiles:", color=(100, 100, 100))
+            dpg.add_text("0", tag="stitch_tile_count", color=(150, 200, 255))
+
+        # Grid Scan section
+        dpg.add_separator()
+        dpg.add_text("Grid Scan", color=(150, 150, 150))
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Start (F5)",
+                tag="btn_grid_start",
+                callback=lambda: controller.start_grid_scan(),
+                width=70
+            )
+            dpg.add_button(
+                label="Pause",
+                tag="btn_grid_pause",
+                callback=lambda: controller.pause_grid_scan(),
+                width=50
+            )
+            dpg.add_button(
+                label="Cancel (F6)",
+                callback=lambda: controller.cancel_grid_scan(),
+                width=75
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("Progress:", color=(100, 100, 100))
+            dpg.add_text("--", tag="scan_progress", color=(150, 200, 255))
+            dpg.add_text("ETA:", color=(100, 100, 100))
+            dpg.add_text("--", tag="scan_eta", color=(150, 200, 255))
+
+        # Z-Stack section
+        dpg.add_separator()
+        dpg.add_text("Z-Stack", color=(150, 150, 150))
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Z-Stack (Z)",
+                callback=lambda: controller.toggle_z_stack(),
+                width=80
+            )
+            dpg.add_text("OFF", tag="status_z_stack", color=(150, 150, 150))
+            dpg.add_button(
+                label="Capture (Shift+Z)",
+                callback=lambda: controller.capture_z_stack(),
+                width=110
+            )
+
+        # Session section
+        dpg.add_separator()
+        dpg.add_text("Session", color=(150, 150, 150))
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Save (F2)",
+                callback=lambda: controller.save_session(),
+                width=70
+            )
+            dpg.add_button(
+                label="Load (F3)",
+                callback=lambda: controller.load_session(),
+                width=70
+            )
+
+        # Well Plate section
+        dpg.add_separator()
+        dpg.add_text("Well Plate (96)", color=(150, 150, 150))
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Scan Labels (F7)",
+                callback=lambda: controller.scan_all_pending_labels(),
+                width=100
+            )
+            dpg.add_button(
+                label="Align (F8)",
+                callback=lambda: controller.compute_plate_alignment(),
+                width=70
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("Label:", color=(100, 100, 100))
+            dpg.add_text("--", tag="status_label_scan", color=(150, 150, 150))
+        with dpg.group(horizontal=True):
+            dpg.add_text("Well:", color=(100, 100, 100))
+            dpg.add_text("--", tag="status_current_well", color=(150, 200, 255))
 
 
 def build_main_window(controller):
@@ -438,6 +620,113 @@ def update_position_overlay(controller):
     if dpg.does_item_exist("overlay_range_text"):
         dpg.set_value("overlay_range_text",
                       f"X:[{x_min}-{x_max}] Y:[{y_min}-{y_max}]")
+
+    # Update stitch status
+    update_stitch_status(controller)
+
+
+def update_stitch_status(controller):
+    """Update the stitch status display."""
+    # Update auto-stitch status
+    if dpg.does_item_exist("status_auto_stitch"):
+        if controller.auto_stitch:
+            dpg.set_value("status_auto_stitch", "ON")
+            dpg.configure_item("status_auto_stitch", color=(100, 255, 100))
+        else:
+            dpg.set_value("status_auto_stitch", "OFF")
+            dpg.configure_item("status_auto_stitch", color=(150, 150, 150))
+
+    # Update tile count
+    if dpg.does_item_exist("stitch_tile_count"):
+        dpg.set_value("stitch_tile_count", str(controller.tile_manager.tile_count))
+
+    # Update grid scan status
+    if dpg.does_item_exist("scan_progress"):
+        if controller.scan_in_progress:
+            dpg.set_value("scan_progress", f"{controller.scan_progress:.1f}%")
+            dpg.configure_item("scan_progress", color=(100, 255, 100))
+        else:
+            dpg.set_value("scan_progress", "--")
+            dpg.configure_item("scan_progress", color=(150, 150, 150))
+
+    if dpg.does_item_exist("scan_eta"):
+        if controller.scan_in_progress:
+            dpg.set_value("scan_eta", controller.scan_eta)
+        else:
+            dpg.set_value("scan_eta", "--")
+
+    # Update Z-stack status
+    if dpg.does_item_exist("status_z_stack"):
+        if controller.z_stack_enabled:
+            dpg.set_value("status_z_stack", f"ON ({controller.z_stack_steps}p)")
+            dpg.configure_item("status_z_stack", color=(100, 255, 100))
+        else:
+            dpg.set_value("status_z_stack", "OFF")
+            dpg.configure_item("status_z_stack", color=(150, 150, 150))
+
+    # Update well plate status
+    if dpg.does_item_exist("status_label_scan"):
+        if controller.label_scan_in_progress:
+            progress = controller.get_label_scan_progress()
+            label = controller.current_label_scan or "?"
+            dpg.set_value("status_label_scan", f"{label} {progress:.0f}%")
+            dpg.configure_item("status_label_scan", color=(100, 255, 100))
+        else:
+            pending = len(controller.plate_manager.get_pending_labels())
+            scanned = len(controller.plate_manager.get_scanned_labels())
+            dpg.set_value("status_label_scan", f"{scanned}/{scanned + pending} labels")
+            dpg.configure_item("status_label_scan", color=(150, 150, 150))
+
+    if dpg.does_item_exist("status_current_well"):
+        well = controller.get_current_well()
+        if well:
+            dpg.set_value("status_current_well", well)
+            dpg.configure_item("status_current_well", color=(150, 200, 255))
+        else:
+            dpg.set_value("status_current_well", "--")
+            dpg.configure_item("status_current_well", color=(150, 150, 150))
+
+
+def update_stitch_canvas_texture(controller):
+    """Update the stitch canvas texture in the overlay.
+
+    This renders stitched tiles as a background in the position overlay.
+    Called from the main render loop when tiles exist.
+    """
+    if controller.tile_manager.tile_count == 0:
+        # No tiles, use default background
+        if dpg.does_item_exist("overlay_range"):
+            dpg.configure_item("overlay_range", fill=OVERLAY_RANGE_COLOR)
+        return
+
+    # Get the rendered stitch canvas
+    stitch_data = controller.get_stitch_canvas_data()
+
+    # Create or update the stitch texture
+    if not dpg.does_item_exist("stitch_texture"):
+        # Create texture on first use
+        with dpg.texture_registry():
+            dpg.add_dynamic_texture(
+                width=controller.stitch_canvas.width,
+                height=controller.stitch_canvas.height,
+                default_value=stitch_data.flatten(),
+                tag="stitch_texture"
+            )
+
+        # Add image to the overlay drawlist
+        if dpg.does_item_exist("position_overlay"):
+            # Draw the stitch texture as background
+            dpg.draw_image(
+                "stitch_texture",
+                pmin=(OVERLAY_PADDING, OVERLAY_PADDING),
+                pmax=(OVERLAY_WIDTH - OVERLAY_PADDING, OVERLAY_HEIGHT - OVERLAY_PADDING),
+                parent="position_overlay",
+                tag="stitch_bg_image",
+                before="overlay_ref_h"  # Draw behind the reference crosshair
+            )
+    else:
+        # Update existing texture
+        dpg.set_value("stitch_texture", stitch_data.flatten())
 
 
 def update_status(controller):

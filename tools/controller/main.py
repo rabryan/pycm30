@@ -45,7 +45,7 @@ import threading
 import argparse
 from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import dearpygui.dearpygui as dpg
@@ -53,6 +53,14 @@ import dearpygui.dearpygui as dpg
 from pycm30 import cm30_api as api
 from tools.controller import ui
 from tools.controller.hot_reload import HotReloader
+from tools.controller.stitching import (
+    TileManager, StitchCanvas, GridScanner, GridScanConfig,
+    ZStackManager, StitchSession, PyramidExporter, ScanState
+)
+from tools.controller.well_plate import (
+    PlateScanManager, LabelScanConfig, LabelScanState,
+    PlateGridScanConfig, LabelReference
+)
 
 
 class CM30Controller:
@@ -70,7 +78,7 @@ class CM30Controller:
         self.capture_mode = "full"
         self.running = True
         self.image_queue = deque(maxlen=2)
-        self.current_image = None
+        self.current_image: np.ndarray | None = None
         self.image_width = 2048
         self.image_height = 1536
         self.last_capture_time_ms = 0
@@ -83,6 +91,8 @@ class CM30Controller:
         self.light_mode = "off"
         self.power_saving = False
         self.capture_enabled = True  # Continuous capture on/off
+        self._capture_ready = threading.Event()
+        self._capture_ready.set()  # Start ready - clear during movement/autofocus
         self.head_info = {}
         self.head_info_update_interval = 2.0  # seconds
         self.last_head_info_update = 0
@@ -126,6 +136,40 @@ class CM30Controller:
         self.fov_width = 3000   # Approximate FOV width
         self.fov_height = 2250  # Approximate FOV height (4:3 aspect)
 
+        # Stitching system
+        self.tile_manager = TileManager()
+        self.tile_manager.fov_width = self.fov_width
+        self.tile_manager.fov_height = self.fov_height
+        self.stitch_canvas = StitchCanvas(width=180, height=180)  # Fit in overlay
+        self.auto_stitch = False  # Auto-capture tiles as we move
+        self.stitch_save_full_res = False  # Save full-res tiles to disk
+        self.last_stitch_position = (0, 0)  # Last position where we captured a tile
+        self.stitch_position_threshold = 2000  # Min movement before auto-capturing new tile
+
+        # Grid scanning
+        self.grid_scanner: GridScanner | None = None
+        self.scan_in_progress = False
+
+        # Z-stack support
+        self.z_stack_manager = ZStackManager(self.tile_manager)
+        self.z_stack_enabled = False
+        self.z_stack_range = 50.0  # Total Z range
+        self.z_stack_steps = 5  # Number of Z planes
+
+        # Session persistence
+        self.session_manager = StitchSession(str(Path.home() / ".pycm30" / "sessions"))
+
+        # ROI navigation (click-to-move)
+        self.roi_click_enabled = True
+
+        # Well plate scanning
+        self.plate_manager = PlateScanManager(
+            fov_width=self.fov_width,
+            fov_height=self.fov_height
+        )
+        self.label_scan_in_progress = False
+        self.current_label_scan: str | None = None
+
         # Initialize API connection
         print(f"Connecting to {hostname}:{port}")
         api.init(hostname, port)
@@ -159,12 +203,16 @@ class CM30Controller:
         new_x = self.stage_x + dx
         new_y = self.stage_y + dy
         print(f"Moving to {new_x}, {new_y}")
+        self._capture_ready.clear()
         try:
             api.xy_move(new_x, new_y)
             self.stage_x = new_x
             self.stage_y = new_y
+            self._wait_for_xy_move()
         except Exception as e:
             print(f"Move error: {e}")
+        finally:
+            self._capture_ready.set()
 
     def move_z_rel(self, dz: float):
         """Move Z axis relative to current position."""
@@ -172,11 +220,14 @@ class CM30Controller:
         self.stage_z = z_info.get("z", 0)
         new_z = self.stage_z + dz
         print(f"Moving Z to {new_z:.4f}")
+        self._capture_ready.clear()
         try:
             api.z_move(new_z)
             self._wait_for_z_move()
         except Exception as e:
             print(f"Z move error: {e}")
+        finally:
+            self._capture_ready.set()
 
     def _wait_for_z_move(self, poll_interval: float = 0.05):
         """Wait for Z movement to complete, updating stage_z while moving."""
@@ -189,6 +240,20 @@ class CM30Controller:
                 time.sleep(poll_interval)
             except Exception as e:
                 print(f"Error polling Z position: {e}")
+                break
+
+    def _wait_for_xy_move(self, poll_interval: float = 0.05):
+        """Wait for XY movement to complete, updating stage position while moving."""
+        while True:
+            try:
+                xy_info = api.get_stage_xy()
+                self.stage_x = xy_info.get("x", self.stage_x)
+                self.stage_y = xy_info.get("y", self.stage_y)
+                if not xy_info.get("is_moving", False):
+                    break
+                time.sleep(poll_interval)
+            except Exception as e:
+                print(f"Error polling XY position: {e}")
                 break
 
     @property
@@ -262,6 +327,565 @@ class CM30Controller:
         self.y_max = center_y + new_span_y // 2
         print(f"XY range zoomed to span {new_span_x}x{new_span_y}")
 
+    # === Stitching Methods ===
+
+    def toggle_auto_stitch(self):
+        """Toggle automatic tile capture as we move."""
+        self.auto_stitch = not self.auto_stitch
+        print(f"Auto-stitch: {'ON' if self.auto_stitch else 'OFF'}")
+
+    def capture_stitch_tile(self, image: np.ndarray | None = None):
+        """Manually capture current position as a stitch tile.
+
+        Args:
+            image: Image to use, or None to use current_image
+        """
+        if image is None:
+            image = self.current_image
+        if image is None:
+            print("No image available for stitch tile")
+            return
+
+        tile = self.tile_manager.add_tile(
+            x=self.stage_x,
+            y=self.stage_y,
+            z=self.stage_z,
+            image=image,
+            save_full_res=self.stitch_save_full_res
+        )
+        if tile:
+            self.last_stitch_position = (self.stage_x, self.stage_y)
+            print(f"Captured stitch tile at ({self.stage_x}, {self.stage_y}), total: {self.tile_manager.tile_count}")
+
+    def maybe_auto_capture_tile(self, image: np.ndarray):
+        """Auto-capture a tile if we've moved enough (called during image capture)."""
+        if not self.auto_stitch:
+            return
+
+        # Check if we've moved enough from last capture
+        dx = abs(self.stage_x - self.last_stitch_position[0])
+        dy = abs(self.stage_y - self.last_stitch_position[1])
+
+        if dx > self.stitch_position_threshold or dy > self.stitch_position_threshold:
+            self.capture_stitch_tile(image)
+
+    def clear_stitch_tiles(self):
+        """Clear all captured stitch tiles."""
+        self.tile_manager.clear()
+        self.stitch_canvas.clear()
+        self.last_stitch_position = (self.stage_x, self.stage_y)
+        print("Stitch tiles cleared")
+
+    def fit_range_to_tiles(self):
+        """Set the XY range to fit all captured tiles."""
+        if self.tile_manager.tile_count == 0:
+            print("No tiles to fit")
+            return
+
+        bounds = self.tile_manager.get_bounds()
+        x_min, y_min, x_max, y_max = bounds
+
+        # Add some padding
+        pad_x = (x_max - x_min) * 0.1
+        pad_y = (y_max - y_min) * 0.1
+
+        self.x_min = int(x_min - pad_x)
+        self.x_max = int(x_max + pad_x)
+        self.y_min = int(y_min - pad_y)
+        self.y_max = int(y_max + pad_y)
+
+        print(f"Range fit to tiles: X[{self.x_min}-{self.x_max}] Y[{self.y_min}-{self.y_max}]")
+
+    def export_stitch_preview(self, output_path: str | None = None):
+        """Export a preview image of the stitched tiles."""
+        from tools.controller.stitching import StitchExporter
+
+        if output_path is None:
+            output_path = f"stitch_preview_{int(time.time())}.png"
+
+        if StitchExporter.export_preview(self.tile_manager, output_path):
+            print(f"Exported stitch preview to {output_path}")
+        else:
+            print("Export failed (no tiles?)")
+
+    def get_stitch_canvas_data(self) -> np.ndarray:
+        """Get the stitched canvas data for the overlay."""
+        # Update canvas view to match current overlay range
+        self.stitch_canvas.set_view(self.x_min, self.y_min, self.x_max, self.y_max)
+        return self.stitch_canvas.render(self.tile_manager)
+
+    # === Grid Scanning Methods ===
+
+    def setup_grid_scan(self, x_min: int = None, y_min: int = None,
+                        x_max: int = None, y_max: int = None,
+                        overlap_pct: float = 10.0):
+        """Set up a grid scan with the given parameters.
+
+        If bounds are not specified, uses current overlay range.
+        """
+        if x_min is None:
+            x_min = self.x_min
+        if y_min is None:
+            y_min = self.y_min
+        if x_max is None:
+            x_max = self.x_max
+        if y_max is None:
+            y_max = self.y_max
+
+        config = GridScanConfig(
+            x_min=x_min, y_min=y_min,
+            x_max=x_max, y_max=y_max,
+            overlap_pct=overlap_pct,
+            z_stack_enabled=self.z_stack_enabled,
+            z_stack_range=self.z_stack_range,
+            z_stack_steps=self.z_stack_steps,
+            autofocus_interval=0 #autfocus never
+        )
+
+        self.grid_scanner = GridScanner(
+            config,
+            fov_width=self.fov_width,
+            fov_height=self.fov_height
+        )
+
+        print(f"Grid scan configured: {self.grid_scanner.total_positions} positions, "
+              f"{self.grid_scanner.total_captures} total captures")
+
+    def start_grid_scan(self):
+        """Start or resume the grid scan."""
+        if not self.grid_scanner:
+            # Set up with default parameters
+            self.setup_grid_scan()
+
+        if self.grid_scanner:
+            self.grid_scanner.start()
+            self.scan_in_progress = True
+            print("Grid scan started")
+
+    def pause_grid_scan(self):
+        """Pause the grid scan."""
+        if self.grid_scanner:
+            self.grid_scanner.pause()
+            self.scan_in_progress = False
+            print("Grid scan paused")
+
+    def cancel_grid_scan(self):
+        """Cancel the grid scan."""
+        if self.grid_scanner:
+            self.grid_scanner.cancel()
+            self.scan_in_progress = False
+            print("Grid scan cancelled")
+
+    def process_grid_scan_step(self):
+        """Process one step of the grid scan. Called from main loop."""
+        if not self.grid_scanner or not self.scan_in_progress:
+            return
+
+        if self.grid_scanner.state != ScanState.RUNNING:
+            self.scan_in_progress = False
+            if self.grid_scanner.state == ScanState.COMPLETED:
+                print(f"Grid scan completed: {self.grid_scanner.tiles_captured} tiles captured")
+            return
+
+        # Get next position
+        next_pos = self.grid_scanner.get_next_position()
+        if not next_pos:
+            return
+
+        x, y, z_offsets = next_pos
+
+        self._capture_ready.clear()
+        try:
+            # Check if autofocus needed
+            if self.grid_scanner.should_autofocus():
+                api.autofocus()
+                self._wait_for_z_move()
+
+            # Move to position and wait for completion
+            api.xy_move(x, y)
+            self.stage_x = x
+            self.stage_y = y
+            self._wait_for_xy_move()
+
+            # Capture at each Z offset (Z-stack)
+            if len(z_offsets) > 1:
+                stack_id = self.z_stack_manager.start_stack(x, y)
+                for z_idx, z_offset in enumerate(z_offsets):
+                    z_target = self.stage_z + z_offset
+                    api.z_move(z_target)
+                    self._wait_for_z_move()
+
+                    # Capture image
+                    img = self.capture_image()
+                    if img is not None:
+                        self.z_stack_manager.add_to_stack(
+                            x, y, z_target, img, z_idx,
+                            save_full_res=self.stitch_save_full_res
+                        )
+                self.z_stack_manager.end_stack()
+            else:
+                # Single plane capture
+                img = self.capture_image()
+                if img is not None:
+                    self.tile_manager.add_tile(
+                        x, y, self.stage_z, img,
+                        save_full_res=self.stitch_save_full_res
+                    )
+        finally:
+            self._capture_ready.set()
+
+        # Advance scanner
+        self.grid_scanner.advance(success=True)
+
+    @property
+    def scan_progress(self) -> float:
+        """Get grid scan progress (0-100)."""
+        if self.grid_scanner:
+            return self.grid_scanner.progress
+        return 0.0
+
+    @property
+    def scan_eta(self) -> str:
+        """Get formatted ETA for grid scan."""
+        if not self.grid_scanner:
+            return "--"
+        eta_sec = self.grid_scanner.eta_seconds
+        if eta_sec <= 0:
+            return "--"
+        minutes = int(eta_sec // 60)
+        seconds = int(eta_sec % 60)
+        return f"{minutes}:{seconds:02d}"
+
+    # === Z-Stack Methods ===
+
+    def toggle_z_stack(self):
+        """Toggle Z-stack capture mode."""
+        self.z_stack_enabled = not self.z_stack_enabled
+        print(f"Z-stack: {'ON' if self.z_stack_enabled else 'OFF'} "
+              f"({self.z_stack_steps} planes, {self.z_stack_range}um range)")
+
+    def set_z_stack_params(self, range_um: float = None, steps: int = None):
+        """Set Z-stack parameters."""
+        if range_um is not None:
+            self.z_stack_range = range_um
+        if steps is not None:
+            self.z_stack_steps = max(2, steps)
+        print(f"Z-stack params: {self.z_stack_steps} planes, {self.z_stack_range}um range")
+
+    def capture_z_stack(self):
+        """Capture a Z-stack at the current position."""
+        z_offsets = np.linspace(
+            -self.z_stack_range / 2,
+            self.z_stack_range / 2,
+            self.z_stack_steps
+        )
+
+        center_z = self.stage_z
+        stack_id = self.z_stack_manager.start_stack(self.stage_x, self.stage_y)
+
+        print(f"Capturing Z-stack: {self.z_stack_steps} planes...")
+        self._capture_ready.clear()
+        try:
+            for z_idx, z_offset in enumerate(z_offsets):
+                z_target = center_z + z_offset
+                api.z_move(z_target)
+                self._wait_for_z_move()
+
+                img = self.capture_image()
+                if img is not None:
+                    self.z_stack_manager.add_to_stack(
+                        self.stage_x, self.stage_y, z_target, img, z_idx,
+                        save_full_res=self.stitch_save_full_res
+                    )
+                print(f"  Plane {z_idx + 1}/{self.z_stack_steps}")
+
+            # Return to center
+            api.z_move(center_z)
+            self._wait_for_z_move()
+        finally:
+            self._capture_ready.set()
+
+        self.z_stack_manager.end_stack()
+        print(f"Z-stack captured: {stack_id}")
+        return stack_id
+
+    def compute_edf(self, stack_id: str = None) -> np.ndarray | None:
+        """Compute Extended Depth of Field for a Z-stack."""
+        if stack_id is None:
+            # Find most recent stack
+            stacks = set(t.z_stack_id for t in self.tile_manager.tiles.values()
+                        if t.z_stack_id)
+            if not stacks:
+                print("No Z-stacks available")
+                return None
+            stack_id = max(stacks)
+
+        edf = self.z_stack_manager.compute_edf(stack_id)
+        if edf is not None:
+            print(f"EDF computed for {stack_id}")
+        return edf
+
+    # === Session Management ===
+
+    def save_session(self, name: str = "session"):
+        """Save current session to disk."""
+        self.session_manager.save(self.tile_manager, name)
+
+    def load_session(self, name: str = "session"):
+        """Load a session from disk."""
+        loaded = self.session_manager.load(name)
+        if loaded:
+            self.tile_manager = loaded
+            self.tile_manager.fov_width = self.fov_width
+            self.tile_manager.fov_height = self.fov_height
+            self.z_stack_manager.tile_manager = self.tile_manager
+            self.stitch_canvas.clear()
+            print(f"Session '{name}' loaded with {self.tile_manager.tile_count} tiles")
+
+    def list_sessions(self) -> list:
+        """List available sessions."""
+        sessions = self.session_manager.list_sessions()
+        print(f"Available sessions: {sessions}")
+        return sessions
+
+    # === ROI Navigation (Click to Move) ===
+
+    def navigate_to_overlay_position(self, click_x: float, click_y: float,
+                                     overlay_width: int, overlay_height: int):
+        """Navigate to a position based on click coordinates on the overlay.
+
+        Args:
+            click_x, click_y: Click position in overlay coordinates
+            overlay_width, overlay_height: Overlay dimensions
+        """
+        if not self.roi_click_enabled:
+            return
+
+        # Convert click to stage coordinates
+        range_x = self.x_max - self.x_min
+        range_y = self.y_max - self.y_min
+
+        stage_x = int(self.x_min + (click_x / overlay_width) * range_x)
+        stage_y = int(self.y_min + (click_y / overlay_height) * range_y)
+
+        print(f"Navigating to ({stage_x}, {stage_y})")
+        self._capture_ready.clear()
+        try:
+            api.xy_move(stage_x, stage_y)
+            self.stage_x = stage_x
+            self.stage_y = stage_y
+            self._wait_for_xy_move()
+        except Exception as e:
+            print(f"Navigation error: {e}")
+        finally:
+            self._capture_ready.set()
+
+    # === Export Methods ===
+
+    def export_deep_zoom(self, output_dir: str = None):
+        """Export stitched image as Deep Zoom format."""
+        if output_dir is None:
+            output_dir = f"deepzoom_{int(time.time())}"
+
+        exporter = PyramidExporter(self.tile_manager)
+
+        def progress_cb(pct):
+            print(f"Export progress: {pct:.1f}%")
+
+        if exporter.export_deep_zoom(output_dir, progress_callback=progress_cb):
+            print(f"Deep Zoom export complete: {output_dir}")
+        else:
+            print("Export failed")
+
+    def export_tiff_pyramid(self, output_path: str = None):
+        """Export stitched image as pyramidal TIFF."""
+        if output_path is None:
+            output_path = f"stitch_{int(time.time())}.tiff"
+
+        exporter = PyramidExporter(self.tile_manager)
+
+        def progress_cb(pct):
+            print(f"Export progress: {pct:.1f}%")
+
+        if exporter.export_tiff_pyramid(output_path, progress_callback=progress_cb):
+            print(f"TIFF export complete: {output_path}")
+        else:
+            print("Export failed")
+
+    def toggle_quality_display(self):
+        """Toggle quality indicator display on stitch canvas."""
+        self.stitch_canvas.show_quality = not self.stitch_canvas.show_quality
+        print(f"Quality display: {'ON' if self.stitch_canvas.show_quality else 'OFF'}")
+
+    # === Well Plate Scanning Methods ===
+
+    def add_label_reference(self, well_name: str, approx_x: int = None, approx_y: int = None):
+        """Add a reference label for plate alignment.
+
+        If coordinates not specified, uses current stage position.
+        """
+        if approx_x is None:
+            approx_x = self.stage_x
+        if approx_y is None:
+            approx_y = self.stage_y
+
+        self.plate_manager.add_reference_label(well_name, approx_x, approx_y)
+
+    def start_label_scan(self, well_name: str = None):
+        """Start scanning a reference label.
+
+        Args:
+            well_name: Label to scan (e.g., "B12"). If None, scans next pending label.
+        """
+        if well_name is None:
+            pending = self.plate_manager.get_pending_labels()
+            if not pending:
+                print("No pending labels to scan")
+                return
+            well_name = pending[0]
+
+        if self.plate_manager.start_label_scan(well_name):
+            self.label_scan_in_progress = True
+            self.current_label_scan = well_name
+
+            # Configure for low-res if specified
+            if self.plate_manager.label_scanner.config.use_low_res:
+                self.set_resolution(high=False)
+
+            print(f"Started label scan for {well_name}")
+
+    def process_label_scan_step(self):
+        """Process one step of label scanning. Called from main loop."""
+        if not self.label_scan_in_progress:
+            return
+
+        scanner = self.plate_manager.label_scanner
+
+        if scanner.is_complete:
+            self.label_scan_in_progress = False
+            return
+
+        # Get next position
+        next_pos = scanner.get_next_position()
+        if next_pos is None:
+            # Finalize and stitch
+            result = scanner.finalize_scan()
+            if result:
+                print(f"Label {result.well_name} scanned: "
+                      f"({result.measured_x}, {result.measured_y}), z={result.measured_z}")
+            self.label_scan_in_progress = False
+            return
+
+        x, y = next_pos
+        scanner.state = LabelScanState.MOVING
+
+        self._capture_ready.clear()
+        try:
+            # Move to position and wait for completion
+            api.xy_move(x, y)
+            self.stage_x = x
+            self.stage_y = y
+            self._wait_for_xy_move()
+
+            # Autofocus if enabled
+            if scanner.config.autofocus_enabled:
+                scanner.state = LabelScanState.FOCUSING
+                api.autofocus()
+                self._wait_for_z_move()
+
+            # Capture
+            scanner.state = LabelScanState.CAPTURING
+            img = self.capture_image()
+            if img is not None:
+                scanner.add_capture(x, y, self.stage_z, img)
+        finally:
+            self._capture_ready.set()
+
+        scanner.advance()
+
+    def scan_all_pending_labels(self):
+        """Queue scanning of all pending reference labels."""
+        pending = self.plate_manager.get_pending_labels()
+        if pending:
+            print(f"Will scan {len(pending)} labels: {pending}")
+            self.start_label_scan(pending[0])
+        else:
+            print("No pending labels")
+
+    def compute_plate_alignment(self):
+        """Compute plate alignment from scanned labels."""
+        if self.plate_manager.compute_plate_alignment():
+            print("Plate alignment computed successfully")
+            print(self.plate_manager.get_alignment_report())
+        else:
+            print("Failed to compute alignment - need more scanned labels")
+
+    def navigate_to_well(self, well_name: str):
+        """Navigate to a specific well.
+
+        Args:
+            well_name: Well name (e.g., "A1", "H12")
+        """
+        pos = self.plate_manager.get_well_position(well_name)
+        if pos:
+            x, y = pos
+            print(f"Moving to well {well_name} at ({x}, {y})")
+            self._capture_ready.clear()
+            try:
+                api.xy_move(x, y)
+                self.stage_x = x
+                self.stage_y = y
+                self._wait_for_xy_move()
+            except Exception as e:
+                print(f"Well navigation error: {e}")
+            finally:
+                self._capture_ready.set()
+        else:
+            print(f"Invalid well name or plate not aligned: {well_name}")
+
+    def setup_plate_scan(self, wells: list = None, row: str = None, column: int = None):
+        """Set up a well plate scan.
+
+        Args:
+            wells: List of well names to scan, or None for all wells
+            row: Scan a single row (e.g., "A", "B")
+            column: Scan a single column (e.g., 1, 12)
+        """
+        if row:
+            config = PlateGridScanConfig.row(row)
+        elif column:
+            config = PlateGridScanConfig.column(column)
+        elif wells:
+            config = PlateGridScanConfig(wells=wells)
+        else:
+            config = PlateGridScanConfig.all_wells()
+
+        self.plate_manager.setup_well_scan(config)
+
+    def start_plate_scan(self):
+        """Start the plate well scan."""
+        if self.plate_manager.grid_scanner:
+            self.plate_manager.grid_scanner.start()
+            print("Plate scan started")
+
+    def get_label_scan_progress(self) -> float:
+        """Get current label scan progress."""
+        return self.plate_manager.label_scanner.progress
+
+    def get_plate_alignment_report(self) -> str:
+        """Get plate alignment status report."""
+        return self.plate_manager.get_alignment_report()
+
+    def export_label_images(self, output_dir: str = None):
+        """Export captured label images."""
+        if output_dir is None:
+            output_dir = f"labels_{int(time.time())}"
+        self.plate_manager.export_label_images(output_dir)
+
+    def get_current_well(self) -> str | None:
+        """Get the well name at current stage position."""
+        return self.plate_manager.plate.stage_to_well(self.stage_x, self.stage_y)
+
     def set_xy_reference(self):
         """Set current XY position as the reference."""
         self.x_ref = self.stage_x
@@ -301,12 +925,15 @@ class CM30Controller:
     def do_autofocus(self):
         """Perform autofocus and wait for completion."""
         print("Autofocusing...")
+        self._capture_ready.clear()
         try:
             api.autofocus()
             self._wait_for_z_move()
             print(f"Autofocus complete at Z={self.stage_z:.4f}")
         except Exception as e:
             print(f"Autofocus error: {e}")
+        finally:
+            self._capture_ready.set()
 
     def toggle_power_saving(self):
         """Toggle power saving mode."""
@@ -462,6 +1089,13 @@ class CM30Controller:
             # Convert PIL image to numpy array (RGBA format for DearPyGUI)
             img_rgba = img.convert("RGBA")
             img_array = np.array(img_rgba, dtype=np.float32) / 255.0
+
+            # Store for manual stitch capture and auto-stitch
+            self.current_image = img_array
+
+            # Auto-capture tile if enabled and moved enough
+            self.maybe_auto_capture_tile(img_array)
+
             return img_array
         except Exception as e:
             print(f"Capture error: {e}")
@@ -714,15 +1348,19 @@ class CM30Controller:
         return result.astype(np.float32)
 
     def image_capture_thread(self):
-        """Background thread for continuous image capture."""
+        """Background thread for continuous image capture.
+
+        Skips capture when the stage is moving or autofocus is in progress
+        (signalled by _capture_ready being cleared).
+        """
         while self.running:
-            if self.capture_enabled:
+            if self.capture_enabled and self._capture_ready.is_set():
                 img_array = self.capture_image()
                 if img_array is not None:
                     self.image_queue.append(img_array)
                 time.sleep(0.05)  # Small delay between captures
             else:
-                time.sleep(0.1)  # Longer sleep when paused
+                time.sleep(0.1)  # Longer sleep when paused or stage busy
 
 
 class GUIManager:
@@ -900,6 +1538,60 @@ class GUIManager:
         # Center XY range overlay on current position
         elif key == dpg.mvKey_C:
             controller.center_xy_range()
+        # Stitch controls
+        elif key == dpg.mvKey_G:
+            # G for "Grab" - toggle auto-stitch
+            controller.toggle_auto_stitch()
+        elif key == dpg.mvKey_B:
+            # B for "Build" - manually capture current tile
+            controller.capture_stitch_tile()
+        elif key == dpg.mvKey_N:
+            # N for "New" - clear tiles
+            shift = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
+            if shift:
+                controller.clear_stitch_tiles()
+        elif key == dpg.mvKey_V:
+            # V for "View" - fit range to tiles
+            controller.fit_range_to_tiles()
+        # Grid scan controls
+        elif key == dpg.mvKey_F5:
+            # F5 - Start/pause grid scan
+            if controller.scan_in_progress:
+                controller.pause_grid_scan()
+            else:
+                controller.start_grid_scan()
+        elif key == dpg.mvKey_F6:
+            # F6 - Cancel grid scan
+            controller.cancel_grid_scan()
+        # Z-stack controls
+        elif key == dpg.mvKey_Z:
+            shift = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
+            if shift:
+                # Shift+Z - Capture Z-stack at current position
+                controller.capture_z_stack()
+            else:
+                # Z - Toggle Z-stack mode
+                controller.toggle_z_stack()
+        # Session controls
+        elif key == dpg.mvKey_F2:
+            # F2 - Save session
+            controller.save_session()
+        elif key == dpg.mvKey_F3:
+            # F3 - Load session
+            controller.load_session()
+        # Quality display toggle
+        elif key == dpg.mvKey_W:
+            controller.toggle_quality_display()
+        # Well plate operations
+        elif key == dpg.mvKey_F7:
+            # F7 - Start label scan (scan pending labels)
+            controller.scan_all_pending_labels()
+        elif key == dpg.mvKey_F8:
+            # F8 - Compute plate alignment
+            controller.compute_plate_alignment()
+        elif key == dpg.mvKey_F9:
+            # F9 - Show alignment report
+            print(controller.get_plate_alignment_report())
         # Quit
         elif key == dpg.mvKey_Q or key == dpg.mvKey_Escape:
             controller.running = False
@@ -985,9 +1677,20 @@ def create_gui(controller: CM30Controller, enable_hot_reload: bool = True):
         # Periodically update head info
         controller.maybe_update_head_info()
 
+        # Process grid scan step if active
+        if controller.scan_in_progress:
+            controller.process_grid_scan_step()
+
+        # Process label scan step if active
+        if controller.label_scan_in_progress:
+            controller.process_label_scan_step()
+
         # Update status display
         try:
             ui.update_status(controller)
+            # Update stitch canvas if we have tiles
+            if controller.tile_manager.tile_count > 0:
+                ui.update_stitch_canvas_texture(controller)
         except Exception:
             pass  # UI might be rebuilding
 
