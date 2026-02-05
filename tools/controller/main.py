@@ -114,6 +114,18 @@ class CM30Controller:
         self.show_stats_panel = False
         self.image_stats = {}  # Computed image statistics
 
+        # XY range for position overlay (stage units)
+        # These define the full travel range of the stage
+        self.x_min = 0
+        self.x_max = 65535
+        self.y_min = 0
+        self.y_max = 65535
+
+        # Field of view size in stage units (approximate)
+        # These represent how much area the camera sees at current position
+        self.fov_width = 3000   # Approximate FOV width
+        self.fov_height = 2250  # Approximate FOV height (4:3 aspect)
+
         # Initialize API connection
         print(f"Connecting to {hostname}:{port}")
         api.init(hostname, port)
@@ -193,6 +205,62 @@ class CM30Controller:
     def z_rel(self) -> float:
         """Get Z position relative to reference plane."""
         return self.stage_z - self.z_ref
+
+    @property
+    def xy_range_x(self) -> tuple:
+        """Get X axis range as (min, max) tuple."""
+        return (self.x_min, self.x_max)
+
+    @property
+    def xy_range_y(self) -> tuple:
+        """Get Y axis range as (min, max) tuple."""
+        return (self.y_min, self.y_max)
+
+    def set_xy_range(self, x_min: int, x_max: int, y_min: int, y_max: int):
+        """Set the XY range for the position overlay."""
+        self.x_min = x_min
+        self.x_max = x_max
+        self.y_min = y_min
+        self.y_max = y_max
+        print(f"XY range set to X:[{x_min}-{x_max}] Y:[{y_min}-{y_max}]")
+
+    def set_fov_size(self, width: int, height: int):
+        """Set the field of view size in stage units."""
+        self.fov_width = width
+        self.fov_height = height
+        print(f"FOV size set to {width}x{height}")
+
+    def center_xy_range(self, span: int = 10000):
+        """Center the XY range on current position with given span."""
+        half_span = span // 2
+        self.x_min = self.stage_x - half_span
+        self.x_max = self.stage_x + half_span
+        self.y_min = self.stage_y - half_span
+        self.y_max = self.stage_y + half_span
+        print(f"XY range centered on ({self.stage_x}, {self.stage_y}) with span {span}")
+
+    def zoom_xy_range(self, factor: float):
+        """Zoom the XY range by a factor (< 1 zooms in, > 1 zooms out)."""
+        # Calculate current center
+        center_x = (self.x_min + self.x_max) // 2
+        center_y = (self.y_min + self.y_max) // 2
+
+        # Calculate current span and apply zoom factor
+        span_x = self.x_max - self.x_min
+        span_y = self.y_max - self.y_min
+        new_span_x = int(span_x * factor)
+        new_span_y = int(span_y * factor)
+
+        # Limit minimum and maximum span
+        new_span_x = max(1000, min(100000, new_span_x))
+        new_span_y = max(1000, min(100000, new_span_y))
+
+        # Apply new range centered on current center
+        self.x_min = center_x - new_span_x // 2
+        self.x_max = center_x + new_span_x // 2
+        self.y_min = center_y - new_span_y // 2
+        self.y_max = center_y + new_span_y // 2
+        print(f"XY range zoomed to span {new_span_x}x{new_span_y}")
 
     def set_xy_reference(self):
         """Set current XY position as the reference."""
@@ -754,7 +822,7 @@ class GUIManager:
         elif key == dpg.mvKey_D:
             controller.move_z_rel(-controller.z_step)
         # XY Step size
-        elif key == dpg.mvKey_Plus:
+        elif key == dpg.mvKey_Plus or key == dpg.mvKey_Add:
             controller.move_step += 100
             print(f"Move step: {controller.move_step}")
         elif key == dpg.mvKey_Minus:
@@ -829,6 +897,9 @@ class GUIManager:
                 # Hot reload (just R)
                 print("[hot-reload] Manual reload triggered")
                 self.hot_reloader.trigger_reload()
+        # Center XY range overlay on current position
+        elif key == dpg.mvKey_C:
+            controller.center_xy_range()
         # Quit
         elif key == dpg.mvKey_Q or key == dpg.mvKey_Escape:
             controller.running = False

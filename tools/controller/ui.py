@@ -7,6 +7,16 @@ Modify this file to see changes reflected in the running application.
 
 import dearpygui.dearpygui as dpg
 
+# Position overlay configuration
+OVERLAY_WIDTH = 200
+OVERLAY_HEIGHT = 200
+OVERLAY_PADDING = 10
+OVERLAY_BG_COLOR = (40, 40, 40, 200)
+OVERLAY_BORDER_COLOR = (100, 100, 100, 255)
+OVERLAY_RANGE_COLOR = (80, 80, 80, 255)
+OVERLAY_FOV_COLOR = (100, 200, 255, 200)
+OVERLAY_REF_COLOR = (255, 200, 100, 150)
+
 
 def build_status_bar():
     """Build the status bar at the top of the window."""
@@ -103,6 +113,7 @@ def build_help_section():
         dpg.add_text("[/]: Adjust Z step (min 1.5625)")
         dpg.add_text("Shift+X: Set XY reference position")
         dpg.add_text("Shift+R: Set Z reference plane")
+        dpg.add_text("C: Center overlay range on current position")
         dpg.add_text("H/L: High/Low resolution")
         dpg.add_text("F: Autofocus")
         dpg.add_text("P/O: Preview/Original capture mode")
@@ -275,6 +286,67 @@ def build_stats_panel():
                 dpg.add_text("(3=normal)", color=(80, 80, 80))
 
 
+def build_position_overlay(controller):
+    """Build the XY position overlay showing current position within max range."""
+    with dpg.group(tag="position_overlay_group"):
+        dpg.add_text("XY Position", color=(150, 150, 150))
+        # Create a drawlist for the position visualization
+        with dpg.drawlist(
+            width=OVERLAY_WIDTH,
+            height=OVERLAY_HEIGHT,
+            tag="position_overlay"
+        ):
+            # Background
+            dpg.draw_rectangle(
+                (0, 0),
+                (OVERLAY_WIDTH, OVERLAY_HEIGHT),
+                fill=OVERLAY_BG_COLOR,
+                color=OVERLAY_BORDER_COLOR,
+                tag="overlay_bg"
+            )
+            # Range rectangle (inner area representing full XY range)
+            dpg.draw_rectangle(
+                (OVERLAY_PADDING, OVERLAY_PADDING),
+                (OVERLAY_WIDTH - OVERLAY_PADDING, OVERLAY_HEIGHT - OVERLAY_PADDING),
+                fill=OVERLAY_RANGE_COLOR,
+                color=OVERLAY_BORDER_COLOR,
+                tag="overlay_range"
+            )
+            # Reference position marker (crosshair)
+            dpg.draw_line(
+                (OVERLAY_WIDTH // 2 - 5, OVERLAY_HEIGHT // 2),
+                (OVERLAY_WIDTH // 2 + 5, OVERLAY_HEIGHT // 2),
+                color=OVERLAY_REF_COLOR,
+                thickness=1,
+                tag="overlay_ref_h"
+            )
+            dpg.draw_line(
+                (OVERLAY_WIDTH // 2, OVERLAY_HEIGHT // 2 - 5),
+                (OVERLAY_WIDTH // 2, OVERLAY_HEIGHT // 2 + 5),
+                color=OVERLAY_REF_COLOR,
+                thickness=1,
+                tag="overlay_ref_v"
+            )
+            # Current position / FOV rectangle (will be updated dynamically)
+            dpg.draw_rectangle(
+                (OVERLAY_WIDTH // 2 - 10, OVERLAY_HEIGHT // 2 - 10),
+                (OVERLAY_WIDTH // 2 + 10, OVERLAY_HEIGHT // 2 + 10),
+                fill=OVERLAY_FOV_COLOR,
+                color=(150, 220, 255, 255),
+                thickness=2,
+                tag="overlay_fov"
+            )
+        # Overlay controls
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Center (C)", callback=lambda: controller.center_xy_range(), width=70)
+            dpg.add_button(label="Zoom+", callback=lambda: controller.zoom_xy_range(0.5), width=50)
+            dpg.add_button(label="Zoom-", callback=lambda: controller.zoom_xy_range(2.0), width=50)
+        # Position info text
+        with dpg.group(horizontal=True):
+            dpg.add_text("Range:", color=(100, 100, 100))
+            dpg.add_text("--", tag="overlay_range_text", color=(150, 150, 150))
+
+
 def build_main_window(controller):
     """Build the main application window."""
     with dpg.window(label="CM30 Control Panel", tag="main_window"):
@@ -289,9 +361,83 @@ def build_main_window(controller):
         build_stats_panel()
         dpg.add_separator()
 
-        # Image display container (texture added dynamically)
-        with dpg.group(tag="image_container"):
-            dpg.add_text("Waiting for first image...")
+        # Position overlay and image display in a horizontal group
+        with dpg.group(horizontal=True):
+            # Position overlay on the left
+            build_position_overlay(controller)
+            dpg.add_spacer(width=20)
+            # Image display container (texture added dynamically)
+            with dpg.group(tag="image_container"):
+                dpg.add_text("Waiting for first image...")
+
+
+def update_position_overlay(controller):
+    """Update the XY position overlay to show current position within range."""
+    if not dpg.does_item_exist("position_overlay"):
+        return
+
+    # Get range values from controller
+    x_min, x_max = controller.xy_range_x
+    y_min, y_max = controller.xy_range_y
+
+    # Calculate drawable area
+    draw_x_min = OVERLAY_PADDING
+    draw_x_max = OVERLAY_WIDTH - OVERLAY_PADDING
+    draw_y_min = OVERLAY_PADDING
+    draw_y_max = OVERLAY_HEIGHT - OVERLAY_PADDING
+    draw_width = draw_x_max - draw_x_min
+    draw_height = draw_y_max - draw_y_min
+
+    # Calculate scale factors
+    range_x = x_max - x_min if x_max > x_min else 1
+    range_y = y_max - y_min if y_max > y_min else 1
+    scale_x = draw_width / range_x
+    scale_y = draw_height / range_y
+
+    # Calculate FOV size in stage units (approximate based on image dimensions)
+    # These are rough estimates - adjust based on actual microscope FOV
+    fov_width = controller.fov_width
+    fov_height = controller.fov_height
+
+    # Convert current position to overlay coordinates
+    pos_x = draw_x_min + (controller.stage_x - x_min) * scale_x
+    pos_y = draw_y_min + (controller.stage_y - y_min) * scale_y
+
+    # Convert FOV size to overlay coordinates
+    fov_w = fov_width * scale_x
+    fov_h = fov_height * scale_y
+
+    # Ensure minimum visible size
+    fov_w = max(fov_w, 4)
+    fov_h = max(fov_h, 4)
+
+    # Update FOV rectangle position (centered on current position)
+    fov_x1 = pos_x - fov_w / 2
+    fov_y1 = pos_y - fov_h / 2
+    fov_x2 = pos_x + fov_w / 2
+    fov_y2 = pos_y + fov_h / 2
+
+    # Update the FOV rectangle
+    if dpg.does_item_exist("overlay_fov"):
+        dpg.configure_item("overlay_fov", pmin=(fov_x1, fov_y1), pmax=(fov_x2, fov_y2))
+
+    # Update reference position marker
+    ref_x = draw_x_min + (controller.x_ref - x_min) * scale_x
+    ref_y = draw_y_min + (controller.y_ref - y_min) * scale_y
+
+    if dpg.does_item_exist("overlay_ref_h"):
+        dpg.configure_item("overlay_ref_h",
+                           p1=(ref_x - 5, ref_y),
+                           p2=(ref_x + 5, ref_y))
+    if dpg.does_item_exist("overlay_ref_v"):
+        dpg.configure_item("overlay_ref_v",
+                           p1=(ref_x, ref_y - 5),
+                           p2=(ref_x, ref_y + 5))
+
+    # Update range text
+    if dpg.does_item_exist("overlay_range_text"):
+        dpg.set_value("overlay_range_text",
+                      f"X:[{x_min}-{x_max}] Y:[{y_min}-{y_max}]")
 
 
 def update_status(controller):
@@ -364,6 +510,9 @@ def update_status(controller):
 
     # Update stats panel visibility and values
     update_stats_panel(controller)
+
+    # Update position overlay
+    update_position_overlay(controller)
 
 
 def update_exposure_display(controller):
